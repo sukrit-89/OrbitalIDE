@@ -11,6 +11,8 @@
 [![Vite](https://img.shields.io/badge/Vite-7-646CFF?style=for-the-badge&logo=vite)](https://vitejs.dev/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
+### 🌐 [**Live Demo →**](https://dojo-pay-two.vercel.app)
+
 </div>
 
 ## 🎯 Overview
@@ -291,8 +293,6 @@ MIT License - Free to use for learning and development.
 
 <div align="center">
 
-**Built with ⚡ on Stellar Testnet**
-
-*Trust through clarity • Power through simplicity*
+**Built on Stellar Testnet**
 
 </div>

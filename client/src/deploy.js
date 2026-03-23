@@ -7,7 +7,7 @@
 
 import * as StellarSdk from '@stellar/stellar-sdk';
 import { Server as SorobanServer } from '@stellar/stellar-sdk/rpc';
-import { signTransaction } from '@stellar/freighter-api';
+import { signTransaction } from './wallet';
 
 // Soroban RPC Server for Testnet
 const sorobanServer = new SorobanServer('https://soroban-testnet.stellar.org');
@@ -95,10 +95,7 @@ async function uploadContractWasm(wasmBuffer, sourcePublicKey) {
 
         // Sign with Freighter
         console.log('Requesting signature from wallet...');
-        const signedXdr = await signTransaction(preparedTransaction.toXDR(), {
-            network: 'TESTNET',
-            networkPassphrase: NETWORK_PASSPHRASE,
-        });
+        const signedXdr = await signTransaction(preparedTransaction.toXDR(), NETWORK_PASSPHRASE);
 
         // Extract signed XDR
         const signedTxXdr = signedXdr.signedTxXdr || signedXdr;
@@ -176,10 +173,7 @@ async function deployContractInstance(wasmHash, sourcePublicKey) {
 
         // Sign with Freighter
         console.log('Requesting signature from wallet...');
-        const signedXdr = await signTransaction(preparedTransaction.toXDR(), {
-            network: 'TESTNET',
-            networkPassphrase: NETWORK_PASSPHRASE,
-        });
+        const signedXdr = await signTransaction(preparedTransaction.toXDR(), NETWORK_PASSPHRASE);
 
         // Extract signed XDR
         const signedTxXdr = signedXdr.signedTxXdr || signedXdr;
@@ -340,10 +334,7 @@ export async function invokeContract(contractId, functionName, args, sourcePubli
 
         // Sign with Freighter
         console.log('Requesting signature from wallet...');
-        const signedXdr = await signTransaction(preparedTransaction.toXDR(), {
-            network: 'TESTNET',
-            networkPassphrase: NETWORK_PASSPHRASE,
-        });
+        const signedXdr = await signTransaction(preparedTransaction.toXDR(), NETWORK_PASSPHRASE);
 
         // Extract signed XDR
         const signedTxXdr = signedXdr.signedTxXdr || signedXdr;

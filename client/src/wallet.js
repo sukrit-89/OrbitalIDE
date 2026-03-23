@@ -1,15 +1,28 @@
 /**
  * wallet.js - Multi-Wallet Integration
  * 
- * Supports multiple Stellar wallets with extensible architecture
- * Currently implements: Freighter (primary), with framework for xBull, Albedo, Rabet
+ * Supports multiple Stellar wallets using stellar-wallet-kit adapters.
+ * Freighter remains the default path for reliability.
  */
 
 import { isConnected, getPublicKey, requestAccess, signTransaction as freighterSign } from '@stellar/freighter-api';
 
-// Wallet Kit instance
 let currentPublicKey = null;
-let connectedWalletId = 'freighter'; // Default to Freighter
+let connectedWalletId = 'freighter';
+let connectedAdapter = null;
+let walletKitAdaptersPromise = null;
+
+const WALLETCONNECT_PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '';
+
+async function getWalletKitAdapters() {
+    if (!walletKitAdaptersPromise) {
+        walletKitAdaptersPromise = import('stellar-wallet-kit')
+            .then((mod) => mod.createWalletAdapters({ walletConnectProjectId: WALLETCONNECT_PROJECT_ID }))
+            .catch(() => ({}));
+    }
+
+    return walletKitAdaptersPromise;
+}
 
 /**
  * Error types for wallet operations (Yellow Belt Requirement)
@@ -35,16 +48,28 @@ export const getAvailableWallets = () => {
             url: 'https://www.freighter.app/',
         },
         {
-            id: 'xbull',
-            name: 'xBull',
-            icon: '🐂',
-            url: 'https://xbull.app/',
-        },
-        {
             id: 'albedo',
             name: 'Albedo',
             icon: '⚡',
             url: 'https://albedo.link/',
+        },
+        {
+            id: 'walletconnect',
+            name: 'WalletConnect',
+            icon: '📱',
+            url: 'https://walletconnect.com/',
+        },
+        {
+            id: 'lobstr',
+            name: 'LOBSTR',
+            icon: '⭐',
+            url: 'https://lobstr.co/',
+        },
+        {
+            id: 'xbull',
+            name: 'xBull',
+            icon: '🐂',
+            url: 'https://xbull.app/',
         },
         {
             id: 'rabet',
@@ -65,16 +90,49 @@ export const connectWallet = async (walletId = 'freighter') => {
     try {
         console.log('Connecting to wallet:', walletId);
 
-        // Currently only Freighter is fully integrated
-        // Other wallets can be added following the same pattern
-        if (walletId !== 'freighter') {
-            const error = new Error(`${walletId} integration coming soon! Please use Freighter for now.`);
+        if (walletId === 'xbull' || walletId === 'rabet') {
+            const error = new Error(`${walletId} integration coming soon! Please use Freighter, Albedo, WalletConnect, or LOBSTR.`);
             error.type = WalletErrorType.NOT_INSTALLED;
             throw error;
         }
 
+        connectedAdapter = null;
+
+        if (walletId !== 'freighter') {
+            const adapters = await getWalletKitAdapters();
+            const adapter = adapters?.[walletId];
+
+            if (!adapter) {
+                const error = new Error(`${walletId} adapter is unavailable in this build.`);
+                error.type = WalletErrorType.NOT_INSTALLED;
+                throw error;
+            }
+
+            const available = await adapter.isAvailable();
+            if (!available && walletId !== 'albedo') {
+                const error = new Error(`${walletId} wallet not available on this device/browser.`);
+                error.type = WalletErrorType.NOT_INSTALLED;
+                throw error;
+            }
+
+            const response = await adapter.connect();
+            const publicKey = response?.publicKey || response?.address;
+
+            if (!publicKey || typeof publicKey !== 'string') {
+                const error = new Error('Failed to retrieve public key from wallet');
+                error.type = WalletErrorType.UNKNOWN;
+                throw error;
+            }
+
+            currentPublicKey = publicKey;
+            connectedWalletId = walletId;
+            connectedAdapter = adapter;
+
+            console.log('Wallet connected successfully:', publicKey);
+            return publicKey;
+        }
+
         // Request access to Freighter
-        // The @stellar/freighter-api package handles detection internally
         console.log('Requesting access to Freighter...');
         const response = await requestAccess();
         console.log('Freighter response:', response);
@@ -94,6 +152,7 @@ export const connectWallet = async (walletId = 'freighter') => {
 
         currentPublicKey = publicKey;
         connectedWalletId = walletId;
+        connectedAdapter = null;
 
         console.log('Wallet connected successfully:', publicKey);
         return publicKey;
@@ -144,11 +203,21 @@ export const signTransaction = async (xdr, networkPassphrase) => {
 
         console.log('Requesting transaction signature...');
 
-        const signedResponse = await freighterSign(xdr, {
-            network: 'TESTNET',
-            networkPassphrase: networkPassphrase,
-            accountToSign: currentPublicKey,
-        });
+        let signedResponse;
+
+        if (connectedWalletId !== 'freighter' && connectedAdapter) {
+            signedResponse = await connectedAdapter.signTransaction(xdr, {
+                network: 'TESTNET',
+                networkPassphrase,
+                accountToSign: currentPublicKey,
+            });
+        } else {
+            signedResponse = await freighterSign(xdr, {
+                network: 'TESTNET',
+                networkPassphrase,
+                accountToSign: currentPublicKey,
+            });
+        }
 
         const signedXdr = signedResponse.signedTxXdr || signedResponse;
 
@@ -204,11 +273,21 @@ export const getConnectedWalletId = () => {
  */
 export const checkConnection = async () => {
     try {
+        if (connectedWalletId !== 'freighter' && connectedAdapter) {
+            const pubKey = await connectedAdapter.getPublicKey();
+            if (pubKey) {
+                currentPublicKey = pubKey;
+                return true;
+            }
+        }
+
         const connected = await isConnected();
         if (connected) {
             const pubKey = await getPublicKey();
             if (pubKey) {
                 currentPublicKey = pubKey;
+                connectedWalletId = 'freighter';
+                connectedAdapter = null;
                 return true;
             }
         }
@@ -227,6 +306,7 @@ export const disconnectWallet = () => {
     console.log('Wallet disconnected');
     currentPublicKey = null;
     connectedWalletId = null;
+    connectedAdapter = null;
     return true;
 };
 

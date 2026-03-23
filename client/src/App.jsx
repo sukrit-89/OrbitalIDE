@@ -24,10 +24,9 @@ import {
 } from 'lucide-react';
 import { 
   connectWallet, 
-  WalletErrorType,
+  getAvailableWallets,
   getConnectedPublicKey,
-  checkConnection,
-  signTransaction as signTxnWallet
+  checkConnection
 } from './wallet';
 import { getExamplesList, getExample } from './contracts/examples';
 import * as AI from './ai';
@@ -51,6 +50,7 @@ function App() {
 function IDE({ onBackToLanding }) {
   // Wallet state
   const [publicKey, setPublicKey] = useState('');
+  const [selectedWalletId, setSelectedWalletId] = useState('freighter');
   const [loading, setLoading] = useState(false);
 
   // Editor state
@@ -78,6 +78,7 @@ function IDE({ onBackToLanding }) {
   const [completionSuggestion, setCompletionSuggestion] = useState(null);
   const editorRef = useRef(null);
   const monacoRef = useRef(null);
+  const wallets = getAvailableWallets();
 
   // Restore cached deploy-related UI state.
   useEffect(() => {
@@ -126,7 +127,7 @@ function IDE({ onBackToLanding }) {
   const handleConnect = async () => {
     try {
       setLoading(true);
-      const key = await connectWallet();
+      const key = await connectWallet(selectedWalletId);
       setPublicKey(key);
     } catch (error) {
       console.error('Connect error:', error);
@@ -525,13 +526,28 @@ function IDE({ onBackToLanding }) {
         <div className="header-actions">
           <div className="network-badge">TESTNET</div>
           {!publicKey ? (
-            <button
-              onClick={handleConnect}
-              disabled={loading}
-              className="btn btn-primary"
-            >
-              {loading ? 'Connecting...' : 'Connect Wallet'}
-            </button>
+            <>
+              <select
+                className="input input-mono"
+                value={selectedWalletId}
+                onChange={(e) => setSelectedWalletId(e.target.value)}
+                disabled={loading}
+                style={{ minWidth: '150px', marginRight: '10px' }}
+              >
+                {wallets.map((wallet) => (
+                  <option key={wallet.id} value={wallet.id}>
+                    {wallet.icon} {wallet.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleConnect}
+                disabled={loading}
+                className="btn btn-primary"
+              >
+                {loading ? 'Connecting...' : 'Connect Wallet'}
+              </button>
+            </>
           ) : (
             <div className="connected-info">
               <code className="connected-key">{publicKey.slice(0, 4)}...{publicKey.slice(-4)}</code>

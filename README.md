@@ -68,6 +68,11 @@ docker compose up
 - **stellar-cli** (optional, for WASM optimization): `cargo install --locked stellar-cli --features opt`
 - **Node.js** 18+
 
+### Wallet Setup Notes
+- The IDE now supports wallet selection in the header: **Freighter**, **Albedo**, **WalletConnect**, and **LOBSTR**.
+- For WalletConnect/LOBSTR, set `VITE_WALLETCONNECT_PROJECT_ID` in `client/.env`.
+- Freighter remains the default and most stable development path.
+
 ## ✨ Features
 
 ### 🔥 Core IDE Features

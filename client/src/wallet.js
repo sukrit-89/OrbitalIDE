@@ -5,14 +5,24 @@
  * Freighter remains the default path for reliability.
  */
 
-import { isConnected, getPublicKey, requestAccess, signTransaction as freighterSign } from '@stellar/freighter-api';
+import { isConnected, getAddress, requestAccess, signTransaction as freighterSign } from '@stellar/freighter-api';
 
 let currentPublicKey = null;
 let connectedWalletId = 'freighter';
 let connectedAdapter = null;
 let walletKitAdaptersPromise = null;
+let albedoClientPromise = null;
 
 const WALLETCONNECT_PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '';
+
+function withTimeout(promise, ms, message) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => {
+            setTimeout(() => reject(new Error(message)), ms);
+        }),
+    ]);
+}
 
 async function getWalletKitAdapters() {
     if (!walletKitAdaptersPromise) {
@@ -22,6 +32,16 @@ async function getWalletKitAdapters() {
     }
 
     return walletKitAdaptersPromise;
+}
+
+async function getAlbedoClient() {
+    if (!albedoClientPromise) {
+        albedoClientPromise = import('@albedo-link/intent')
+            .then((mod) => mod.default || mod)
+            .catch(() => null);
+    }
+
+    return albedoClientPromise;
 }
 
 /**
@@ -98,6 +118,35 @@ export const connectWallet = async (walletId = 'freighter') => {
 
         connectedAdapter = null;
 
+        if (walletId === 'albedo') {
+            const albedo = await getAlbedoClient();
+
+            if (!albedo || typeof albedo.publicKey !== 'function') {
+                const error = new Error('Albedo SDK is unavailable in this build.');
+                error.type = WalletErrorType.NOT_INSTALLED;
+                throw error;
+            }
+
+            const response = await albedo.publicKey({
+                network: 'testnet',
+            });
+
+            const publicKey = response?.pubkey;
+
+            if (!publicKey || typeof publicKey !== 'string') {
+                const error = new Error('Failed to retrieve public key from Albedo');
+                error.type = WalletErrorType.UNKNOWN;
+                throw error;
+            }
+
+            currentPublicKey = publicKey;
+            connectedWalletId = walletId;
+            connectedAdapter = null;
+
+            console.log('Wallet connected successfully:', publicKey);
+            return publicKey;
+        }
+
         if (walletId !== 'freighter') {
             const adapters = await getWalletKitAdapters();
             const adapter = adapters?.[walletId];
@@ -132,10 +181,42 @@ export const connectWallet = async (walletId = 'freighter') => {
             return publicKey;
         }
 
+        let connected = false;
+        try {
+            connected = Boolean(await isConnected());
+        } catch {
+            connected = false;
+        }
+        if (connected) {
+            const existingAddress = await withTimeout(
+                getAddress(),
+                10000,
+                'Timed out while checking existing Freighter session.'
+            );
+
+            const existingPublicKey = existingAddress?.address;
+            if (!existingAddress?.error && typeof existingPublicKey === 'string' && existingPublicKey) {
+                currentPublicKey = existingPublicKey;
+                connectedWalletId = walletId;
+                connectedAdapter = null;
+
+                console.log('Wallet connected from existing session:', existingPublicKey);
+                return existingPublicKey;
+            }
+        }
+
         // Request access to Freighter
         console.log('Requesting access to Freighter...');
-        const response = await requestAccess();
+        const response = await withTimeout(
+            requestAccess(),
+            45000,
+            'Freighter did not respond in time. Check if the popup was blocked and try again.'
+        );
         console.log('Freighter response:', response);
+
+        if (response?.error) {
+            throw new Error(response.error.message || 'Freighter access request failed');
+        }
 
         let publicKey;
         if (typeof response === 'string') {
@@ -205,7 +286,19 @@ export const signTransaction = async (xdr, networkPassphrase) => {
 
         let signedResponse;
 
-        if (connectedWalletId !== 'freighter' && connectedAdapter) {
+        if (connectedWalletId === 'albedo') {
+            const albedo = await getAlbedoClient();
+
+            if (!albedo || typeof albedo.tx !== 'function') {
+                throw new Error('Albedo SDK is unavailable for transaction signing');
+            }
+
+            signedResponse = await albedo.tx({
+                xdr,
+                pubkey: currentPublicKey,
+                network: 'testnet',
+            });
+        } else if (connectedWalletId !== 'freighter' && connectedAdapter) {
             signedResponse = await connectedAdapter.signTransaction(xdr, {
                 network: 'TESTNET',
                 networkPassphrase,
@@ -217,9 +310,20 @@ export const signTransaction = async (xdr, networkPassphrase) => {
                 networkPassphrase,
                 accountToSign: currentPublicKey,
             });
+
+            if (signedResponse?.error) {
+                throw new Error(signedResponse.error.message || 'Freighter signing failed');
+            }
         }
 
-        const signedXdr = signedResponse.signedTxXdr || signedResponse;
+        const signedXdr =
+            signedResponse?.signedTxXdr ||
+            signedResponse?.signed_envelope_xdr ||
+            signedResponse;
+
+        if (typeof signedXdr !== 'string' || !signedXdr) {
+            throw new Error('Wallet returned an invalid signed transaction payload');
+        }
 
         console.log('Transaction signed successfully');
         return signedXdr;
@@ -283,7 +387,8 @@ export const checkConnection = async () => {
 
         const connected = await isConnected();
         if (connected) {
-            const pubKey = await getPublicKey();
+            const addressResponse = await getAddress();
+            const pubKey = addressResponse?.address;
             if (pubKey) {
                 currentPublicKey = pubKey;
                 connectedWalletId = 'freighter';

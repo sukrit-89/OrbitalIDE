@@ -2,17 +2,46 @@
 
 Browser-based IDE for Soroban smart contract development with AI assistance.
 
-## 🚀 Quick Start
+## Quickstart
+
+### Prerequisites
+
+- Node.js 18+
+- npm
+
+### Frontend Only
 
 ```bash
-# Install dependencies
+cd client
 npm install
-
-# Start development server
 npm run dev
+```
 
-# Build for production
-npm run build
+Open `http://localhost:5173`.
+
+### Full Local Stack (Frontend + Compiler Backend)
+
+In terminal 1:
+
+```bash
+cd server
+npm install
+npm start
+```
+
+In terminal 2:
+
+```bash
+cd client
+npm install
+npm run dev
+```
+
+Optional `client/.env`:
+
+```env
+VITE_COMPILER_URL=http://localhost:3001
+VITE_WALLETCONNECT_PROJECT_ID=your_walletconnect_project_id
 ```
 
 ## 📁 Project Structure

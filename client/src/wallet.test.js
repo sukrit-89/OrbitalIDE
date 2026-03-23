@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@stellar/freighter-api', () => ({
   isConnected: vi.fn(),
-  getPublicKey: vi.fn(),
+  getAddress: vi.fn(),
   requestAccess: vi.fn(),
   signTransaction: vi.fn(),
 }));

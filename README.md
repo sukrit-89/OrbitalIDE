@@ -315,7 +315,7 @@ This project demonstrates all Yellow Belt requirements:
 - [x] Wallet error handling (not found/rejected/insufficient)
 - [x] Transaction status tracking (pending/success/fail)
 - [~] Multi-wallet support (Freighter live, other providers scaffolded)
-- [~] Event listening/state sync (confirmation polling live; full event stream pending)
+- [x] Event listening/state sync (contract events polled and synchronized in UI)
 
 ### Orange Belt Checklist
 

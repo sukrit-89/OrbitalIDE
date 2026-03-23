@@ -31,8 +31,8 @@ import {
 import { getExamplesList, getExample } from './contracts/examples';
 import * as AI from './ai';
 import * as Compiler from './compiler';
-import { deployContract, invokeContract, getExplorerUrl } from './deploy';
-import { readCachedDeployState, writeCachedDeployState } from './cache';
+import { deployContract, getContractEvents, invokeContract, getExplorerUrl } from './deploy';
+import { readCachedDeployState, readEventCursor, writeCachedDeployState, writeEventCursor } from './cache';
 import Landing from './Landing';
 
 function App() {
@@ -67,6 +67,8 @@ function IDE({ onBackToLanding }) {
   const [selectedFunction, setSelectedFunction] = useState(null);
   const [functionParams, setFunctionParams] = useState({});
   const [callResult, setCallResult] = useState(null);
+  const [eventSync, setEventSync] = useState({ live: false, lastLedger: null, error: null });
+  const [eventCursor, setEventCursor] = useState(null);
 
   // AI state
   const [apiKey, setApiKey] = useState('');
@@ -78,6 +80,8 @@ function IDE({ onBackToLanding }) {
   const [completionSuggestion, setCompletionSuggestion] = useState(null);
   const editorRef = useRef(null);
   const monacoRef = useRef(null);
+  const eventCursorRef = useRef(null);
+  const pollTimerRef = useRef(null);
   const wallets = getAvailableWallets();
 
   // Restore cached deploy-related UI state.
@@ -95,6 +99,97 @@ function IDE({ onBackToLanding }) {
   useEffect(() => {
     writeCachedDeployState({ deployedContract, transactions });
   }, [deployedContract, transactions]);
+
+  useEffect(() => {
+    eventCursorRef.current = eventCursor;
+  }, [eventCursor]);
+
+  useEffect(() => {
+    if (!deployedContract?.id) {
+      setEventCursor(null);
+      setEventSync({ live: false, lastLedger: null, error: null });
+      return;
+    }
+
+    const cursor = readEventCursor(deployedContract.id);
+    setEventCursor(cursor);
+    eventCursorRef.current = cursor;
+  }, [deployedContract?.id]);
+
+  useEffect(() => {
+    if (!deployedContract?.id) return;
+
+    let cancelled = false;
+
+    const scheduleNextPoll = () => {
+      if (cancelled) return;
+      pollTimerRef.current = setTimeout(pollEvents, 5000);
+    };
+
+    const pollEvents = async () => {
+      try {
+        const response = await getContractEvents(deployedContract.id, {
+          cursor: eventCursorRef.current,
+          limit: 20,
+        });
+
+        if (cancelled) return;
+
+        if (response.cursor && response.cursor !== eventCursorRef.current) {
+          setEventCursor(response.cursor);
+          eventCursorRef.current = response.cursor;
+          writeEventCursor(deployedContract.id, response.cursor);
+        }
+
+        if (Array.isArray(response.events) && response.events.length > 0) {
+          const eventEntries = response.events.map((event) => ({
+            type: 'event',
+            eventId: event.id,
+            eventType: event.type,
+            contractId: event.contractId || deployedContract.id,
+            timestamp: event.ledgerClosedAt || new Date().toISOString(),
+            hash: event.txHash,
+            explorerUrl: getExplorerUrl(event.txHash),
+            topic: event.topicNative,
+            result: event.valueNative,
+          }));
+
+          setTransactions((prev) => {
+            const seen = new Set(prev.map((tx) => tx.eventId || tx.hash));
+            const incoming = eventEntries.filter((tx) => !seen.has(tx.eventId || tx.hash));
+            return incoming.length > 0 ? [...incoming, ...prev].slice(0, 50) : prev;
+          });
+
+          const latestEvent = eventEntries[0];
+          setCallResult({
+            status: 'success',
+            result: JSON.stringify(latestEvent.result, null, 2),
+          });
+        }
+
+        setEventSync({
+          live: true,
+          lastLedger: response.latestLedger || null,
+          error: null,
+        });
+      } catch (error) {
+        if (!cancelled) {
+          setEventSync((prev) => ({ ...prev, live: false, error: error.message }));
+        }
+      } finally {
+        scheduleNextPoll();
+      }
+    };
+
+    pollEvents();
+
+    return () => {
+      cancelled = true;
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+      }
+    };
+  }, [deployedContract?.id]);
 
   // Check for existing wallet connection on mount
   useEffect(() => {
@@ -889,6 +984,13 @@ function IDE({ onBackToLanding }) {
           {activePanel === 'interact' && (
             <div className="panel-content">
               <h2 className="panel-title">Call Contract Functions</h2>
+              {deployedContract && (
+                <p className="help-text" style={{ marginBottom: '14px' }}>
+                  Event Sync: {eventSync.live ? 'LIVE' : 'RECONNECTING'}
+                  {eventSync.lastLedger ? ` · Ledger ${eventSync.lastLedger}` : ''}
+                  {eventSync.error ? ` · ${eventSync.error}` : ''}
+                </p>
+              )}
 
               {deployedContract ? (
                 <>
@@ -995,6 +1097,12 @@ function IDE({ onBackToLanding }) {
                         {tx.type === 'deploy' ? (
                           <>
                             <div>Contract: <code>{tx.contractId}</code></div>
+                          </>
+                        ) : tx.type === 'event' ? (
+                          <>
+                            <div>Event Type: <code>{tx.eventType}</code></div>
+                            <div>Topic: <code>{JSON.stringify(tx.topic)}</code></div>
+                            <div>Value: <code>{JSON.stringify(tx.result)}</code></div>
                           </>
                         ) : (
                           <>

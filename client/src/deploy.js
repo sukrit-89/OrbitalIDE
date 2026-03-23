@@ -370,6 +370,75 @@ export async function invokeContract(contractId, functionName, args, sourcePubli
 }
 
 /**
+ * Convert ScVal to native JS value without throwing.
+ *
+ * @param {import('@stellar/stellar-sdk').xdr.ScVal} scVal
+ * @returns {any}
+ */
+function scValToNativeSafe(scVal) {
+    try {
+        return StellarSdk.scValToNative(scVal);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Normalize Soroban event response into UI-friendly shape.
+ *
+ * @param {object} eventResponse
+ * @returns {object}
+ */
+export function normalizeContractEvent(eventResponse) {
+    const contractId = eventResponse.contractId?.toString?.() || eventResponse.contractId || null;
+
+    return {
+        id: eventResponse.id,
+        type: eventResponse.type,
+        contractId,
+        ledger: eventResponse.ledger,
+        ledgerClosedAt: eventResponse.ledgerClosedAt,
+        txHash: eventResponse.txHash,
+        topicNative: Array.isArray(eventResponse.topic)
+            ? eventResponse.topic.map((topicVal) => scValToNativeSafe(topicVal))
+            : [],
+        valueNative: scValToNativeSafe(eventResponse.value),
+    };
+}
+
+/**
+ * Fetch contract events with cursor-based pagination.
+ *
+ * @param {string} contractId
+ * @param {{cursor?: string|null, limit?: number}} options
+ * @returns {Promise<{events: object[], cursor: string, latestLedger: number}>}
+ */
+export async function getContractEvents(contractId, { cursor = null, limit = 20 } = {}) {
+    if (!contractId) {
+        throw new Error('contractId is required to fetch events');
+    }
+
+    const filters = [{ type: 'contract', contractIds: [contractId] }];
+    let request;
+
+    if (cursor) {
+        request = { filters, cursor, limit };
+    } else {
+        const latestLedger = await sorobanServer.getLatestLedger();
+        const sequence = latestLedger?.sequence || 1;
+        const startLedger = Math.max(1, sequence - 200);
+        request = { filters, startLedger, limit };
+    }
+
+    const response = await sorobanServer.getEvents(request);
+    return {
+        events: (response.events || []).map(normalizeContractEvent),
+        cursor: response.cursor,
+        latestLedger: response.latestLedger,
+    };
+}
+
+/**
  * Get Stellar Explorer URL for a transaction
  * 
  * @param {string} hash - Transaction hash

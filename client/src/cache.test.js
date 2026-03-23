@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  readEventCursor,
   readCachedDeployState,
   readJson,
   STORAGE_KEYS,
+  writeEventCursor,
   writeCachedDeployState,
   writeJson,
 } from './cache';
@@ -36,5 +38,14 @@ describe('cache helpers', () => {
     expect(state.transactions).toHaveLength(50);
     expect(state.transactions[0].hash).toBe('tx-0');
     expect(state.transactions[49].hash).toBe('tx-49');
+  });
+
+  it('persists event cursor per contract', () => {
+    writeEventCursor('CONE', 'cursor-1');
+    writeEventCursor('CTWO', 'cursor-2');
+
+    expect(readEventCursor('CONE')).toBe('cursor-1');
+    expect(readEventCursor('CTWO')).toBe('cursor-2');
+    expect(readEventCursor('CUNKNOWN')).toBe(null);
   });
 });

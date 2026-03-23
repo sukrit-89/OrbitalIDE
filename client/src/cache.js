@@ -1,6 +1,7 @@
 const STORAGE_KEYS = {
   DEPLOYED_CONTRACT: 'orbital_deployed_contract',
   TRANSACTIONS: 'orbital_transactions',
+  EVENT_CURSORS: 'orbital_event_cursors',
 };
 
 function hasStorage() {
@@ -39,6 +40,19 @@ export function readCachedDeployState() {
 export function writeCachedDeployState({ deployedContract, transactions }) {
   writeJson(STORAGE_KEYS.DEPLOYED_CONTRACT, deployedContract || null);
   writeJson(STORAGE_KEYS.TRANSACTIONS, Array.isArray(transactions) ? transactions.slice(0, 50) : []);
+}
+
+export function readEventCursor(contractId) {
+  if (!contractId) return null;
+  const cursors = readJson(STORAGE_KEYS.EVENT_CURSORS, {});
+  return cursors[contractId] || null;
+}
+
+export function writeEventCursor(contractId, cursor) {
+  if (!contractId || !cursor) return;
+  const cursors = readJson(STORAGE_KEYS.EVENT_CURSORS, {});
+  cursors[contractId] = cursor;
+  writeJson(STORAGE_KEYS.EVENT_CURSORS, cursors);
 }
 
 export { STORAGE_KEYS };

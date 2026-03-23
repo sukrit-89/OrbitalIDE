@@ -33,6 +33,7 @@ import { getExamplesList, getExample } from './contracts/examples';
 import * as AI from './ai';
 import * as Compiler from './compiler';
 import { deployContract, invokeContract, getExplorerUrl } from './deploy';
+import { readCachedDeployState, writeCachedDeployState } from './cache';
 import Landing from './Landing';
 
 function App() {
@@ -77,6 +78,22 @@ function IDE({ onBackToLanding }) {
   const [completionSuggestion, setCompletionSuggestion] = useState(null);
   const editorRef = useRef(null);
   const monacoRef = useRef(null);
+
+  // Restore cached deploy-related UI state.
+  useEffect(() => {
+    const cached = readCachedDeployState();
+    if (cached.deployedContract) {
+      setDeployedContract(cached.deployedContract);
+    }
+    if (Array.isArray(cached.transactions) && cached.transactions.length > 0) {
+      setTransactions(cached.transactions);
+    }
+  }, []);
+
+  // Persist deploy-related state for basic session continuity.
+  useEffect(() => {
+    writeCachedDeployState({ deployedContract, transactions });
+  }, [deployedContract, transactions]);
 
   // Check for existing wallet connection on mount
   useEffect(() => {

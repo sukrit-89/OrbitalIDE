@@ -124,6 +124,22 @@ cd client && npm install && npm run dev
 cd server && node build-examples.js
 ```
 
+## 🧪 Testing
+
+Run frontend unit tests with Vitest:
+
+```bash
+cd client
+npm test
+```
+
+Watch mode during development:
+
+```bash
+cd client
+npm run test:watch
+```
+
 ## 🚀 First Deployment
 
 1. **Get Testnet XLM**: Visit [Friendbot](https://friendbot.stellar.org/) with your wallet address
@@ -279,90 +295,39 @@ This project demonstrates all Yellow Belt requirements:
 ---
 
 ## 🚧 Roadmap
-Dojo Yellow Belt ✅
+### Current Status (March 2026)
 
-**All requirements implemented with real blockchain integration:**
+| Track | Status | Notes |
+|------|--------|-------|
+| Yellow Belt | Mostly complete | Real deployment, invocation, and tx tracking are live. |
+| Orange Belt | In progress | Loading states, tests, and local caching are in place; video and multi-wallet work remain. |
 
-| Requirement | Implementation | Evidence |
-|-------------|---------------|----------|
-| Smart Contract Integration | Real deployment + invocation via Stellar SDK | [client/src/deploy.js](client/src/deploy.js) |
-| Multi-Wallet Support | Freighter integration (framework for others) | [client/src/wallet.js](client/src/wallet.js) |
-| Error Handling (4+ types) | NOT_INSTALLED, USER_REJECTED, INSUFFICIENT_BALANCE, NETWORK_ERROR | [client/src/wallet.js](client/src/wallet.js) |
-| Transaction Tracking | Pending → Success → Result with Explorer links | [client/src/App.jsx](client/src/App.jsx) |
-| Event Listening | Real-time transaction confirmation polling | [client/src/deploy.js](client/src/deploy.js) |
-- [ ] 🤖 AI-powered contract testing
+### Yellow Belt Checklist
 
----
+- [x] Smart contract deployment to testnet
+- [x] Contract function invocation from frontend
+- [x] Read/write interactions via on-chain calls
+- [x] Wallet error handling (not found/rejected/insufficient)
+- [x] Transaction status tracking (pending/success/fail)
+- [~] Multi-wallet support (Freighter live, other providers scaffolded)
+- [~] Event listening/state sync (confirmation polling live; full event stream pending)
 
-## 💡 Why This Matters
+### Orange Belt Checklist
 
-### For Developers
-- **Zero Setup Friction**: No Rust installation, no CLI configuration
-- **Learn Faster**: Edit and deploy in seconds, not hours
-- **Experiment Safely**: Testnet environment, instant feedback
+- [x] Loading states and progress indicators
+- [x] Basic caching implementation (API key + deploy state + transaction history persisted)
+- [x] Automated tests (Vitest suite for wallet/compiler/cache)
+- [x] Complete documentation with README
+- [ ] 1-minute demo video
 
-### For the Ecosystem
-- **Lower Barrier to Entry**: More developers = more dApps
-- **Educational Tool**: Perfect for tutorials and workshops
-- **Rapid Prototyping**: Test contract logic before local setup
+### Next Priorities
 
-### Comparison with Existing Tools
-
-| Tool | Setup Time | AI Assistant | Compilation | Deployment | Learning Curve |
-|------|-----------|--------------|-------------|------------|---------------|
-| **Local Rust** | 30+ min | ❌ | Local | CLI | Steep |
-| **Soroban CLI** | 15 min | ❌ | Local | CLI | Moderate |
-| **Orbital IDE** | 0 min | ✅ | Browser* | One-click | Gentle |
-
-*Phase 2 feature
-
----Yellow Belt ✅
-- [x] Monaco editor + Example contracts
-- [x] Real blockchain deployment (WASM upload + instance creation)
-- [x] Real contract invocation with parameter handling
-- [x] Freighter wallet integration
-- [x] Transaction confirmation polling
-- [x] Stellar Explorer integration
-- [x] AI coding assistant (chat, completion, generation)
-
-### Phase 2: Orange Belt 🔄
-- [x] Deployment system architecture
-- [ ] Backend Rust→WASM compilation service (endpoint ready)
-- [ ] WASM optimization
-- [ ] Custom contract deployment (not just precompiled examples)
-- [ ] Contract function discovery (ABI parsing)
-
-### Phase 3: Green Belt 📋
-- [ ] Multi-file contract support
-- [ ] Gas estimation UI
-- [ ] Contract verification
-- [ ] AI security auditing
-- [ ] Debugging tools (breakpoints, logs)
-
-### Phase 4: Beyond 🌟
-- [ ] Contract marketplace
-- [ ] Share contracts via URL
-- [ ] Collaboration features
-- [ ] Mainnet support
-- [ ] AI-powered
+1. Expand tests to cover deploy and interaction flows.
+2. Add caching for recent compile results by source hash.
+3. Integrate StellarWalletsKit for true multi-wallet connections.
+4. Add contract-event synchronization beyond transaction confirmation polling.
+5. Record and link the demo video.
 
 ---
 
-**Made with ❤️ for the Stellar community**
-
-*Lowering Orbital IDE?
-
-| Feature | Local Setup | Soroban CLI | Orbital IDE |
-|---------|------------|-------------|------------|
-| Setup Time | 30+ min | 15 min | **0 min** |
-| AI Assistant | ❌ | ❌ | **✅** |
-| Real Deployment | ✅ | ✅ | **✅** |
-| Real Invocation | ✅ | ✅ | **✅** |
-| Learning Curve | Steep | Moderate | **Gentle** |
-| Browser-based | ❌ | ❌ | **✅** |
-
-**Perfect for:**
-- Learning Soroban without Rust installation
-- Rapid prototyping and experimentation
-- Workshops and tutorials
-- Testing contract logic before local development
+**Made for Stellar Monthly Builder Challenge**

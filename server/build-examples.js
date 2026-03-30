@@ -19,11 +19,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 
 const execFileAsync = promisify(execFile);
 
-const ROOT = resolve(import.meta.dirname, '..');
+const SCRIPT_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)));
+const ROOT = resolve(SCRIPT_DIR, '..');
 const WASM_OUTPUT_DIR = join(ROOT, 'client', 'public', 'wasm');
 const TEMPLATE_CARGO = join(ROOT, 'server', 'templates', 'Cargo.toml');
 

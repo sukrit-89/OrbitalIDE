@@ -42,6 +42,17 @@ Optional `client/.env`:
 ```env
 VITE_COMPILER_URL=http://localhost:3001
 VITE_WALLETCONNECT_PROJECT_ID=your_walletconnect_project_id
+
+# Optional endpoint overrides (frontend)
+VITE_SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
+VITE_HORIZON_URL=https://horizon-testnet.stellar.org
+VITE_STELLAR_EXPLORER_BASE_URL=https://stellar.expert/explorer/testnet
+VITE_GROQ_API_URL=https://api.groq.com/openai/v1/chat/completions
+
+# Optional resource links shown in UI
+VITE_SOROBAN_DOCS_URL=https://soroban.stellar.org/docs
+VITE_FRIENDBOT_URL=https://friendbot.stellar.org/
+VITE_GROQ_CONSOLE_URL=https://console.groq.com
 ```
 
 ## 📁 Project Structure
@@ -76,8 +87,16 @@ client/
 Create `.env` file:
 
 ```env
-# Optional: Backend compiler service
-VITE_COMPILER_URL=http://localhost:3001/compile
+# Backend compiler service base URL
+VITE_COMPILER_URL=http://localhost:3001
+
+# Blockchain endpoints used by deploy/invoke/event flows
+VITE_SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
+VITE_HORIZON_URL=https://horizon-testnet.stellar.org
+
+# Explorer and AI endpoints
+VITE_STELLAR_EXPLORER_BASE_URL=https://stellar.expert/explorer/testnet
+VITE_GROQ_API_URL=https://api.groq.com/openai/v1/chat/completions
 ```
 
 ### AI Assistant Setup

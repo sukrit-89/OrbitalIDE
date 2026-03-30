@@ -3,7 +3,9 @@
  * Provides AI-powered code completion, generation, explanation, and debugging
  */
 
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+import { getGroqApiUrl } from './endpoints';
+
+const GROQ_API_URL = getGroqApiUrl();
 
 // Groq models - using llama3 for speed and quality
 const MODELS = {
@@ -278,7 +280,7 @@ export async function* streamChatResponse(userMessage, conversationHistory = [])
           if (content) {
             yield content;
           }
-        } catch (e) {
+        } catch {
           // Skip invalid JSON
         }
       }

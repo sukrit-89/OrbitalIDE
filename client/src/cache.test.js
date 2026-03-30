@@ -7,7 +7,7 @@ import {
   writeEventCursor,
   writeCachedDeployState,
   writeJson,
-} from './cache';
+} from './services/cache';
 
 describe('cache helpers', () => {
   beforeEach(() => {

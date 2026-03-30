@@ -10,6 +10,8 @@
  * Backend: server/index.js (Node.js + cargo + wasm32-unknown-unknown)
  */
 
+import { getCompilerCompileUrl, getCompilerHealthUrl } from './endpoints';
+
 /**
  * Compilation status types
  */
@@ -99,8 +101,7 @@ async function loadPrecompiledWasm(exampleId) {
  * @returns {Promise<{status: string, wasm?: Uint8Array, error?: string}>}
  */
 async function compileViaBackend(sourceCode) {
-    const baseUrl = import.meta.env.VITE_COMPILER_URL || 'http://localhost:3001';
-    const endpoint = baseUrl.endsWith('/compile') ? baseUrl : `${baseUrl}/compile`;
+    const endpoint = getCompilerCompileUrl();
 
     try {
         console.log('Sending code to compilation service:', endpoint);
@@ -175,8 +176,7 @@ function base64ToUint8Array(base64) {
  * @returns {Promise<{available: boolean, rust?: string, stellarCli?: string}>}
  */
 export async function checkCompilerAvailability() {
-    const baseUrl = import.meta.env.VITE_COMPILER_URL || 'http://localhost:3001';
-    const endpoint = baseUrl.replace(/\/compile$/, '') + '/health';
+    const endpoint = getCompilerHealthUrl();
 
     try {
         const response = await fetch(endpoint, {

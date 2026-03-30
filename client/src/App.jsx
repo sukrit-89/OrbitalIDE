@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import './App.css';
+import { useEventPolling } from './hooks/useEventPolling';
 import Editor from '@monaco-editor/react';
 import * as StellarSdk from '@stellar/stellar-sdk';
-import { 
+import {
   Code2,
   Rocket,
   Zap,
@@ -22,17 +23,24 @@ import {
   Target,
   Link
 } from 'lucide-react';
-import { 
-  connectWallet, 
+import {
+  connectWallet,
   getAvailableWallets,
   getConnectedPublicKey,
   checkConnection
-} from './wallet';
+} from './services/wallet';
 import { getExamplesList, getExample } from './contracts/examples';
-import * as AI from './ai';
-import * as Compiler from './compiler';
-import { deployContract, getContractEvents, invokeContract, getExplorerUrl } from './deploy';
-import { readCachedDeployState, readEventCursor, writeCachedDeployState, writeEventCursor } from './cache';
+import * as AI from './services/ai';
+import * as Compiler from './services/compiler';
+import {
+  deployContract,
+  getContractFunctions,
+  invokeContract,
+  getExplorerUrl,
+  normalizeFunctionDefinitions,
+} from './services/deploy';
+import { readCachedDeployState, writeCachedDeployState } from './services/cache';
+import { EXTERNAL_LINKS, getExplorerContractUrl, getExplorerHomeUrl, getExplorerTxUrl } from './services/endpoints';
 import Landing from './Landing';
 
 function App() {
@@ -65,10 +73,17 @@ function IDE({ onBackToLanding }) {
 
   // Interaction state
   const [selectedFunction, setSelectedFunction] = useState(null);
+  const [availableFunctions, setAvailableFunctions] = useState([]);
   const [functionParams, setFunctionParams] = useState({});
+  const [functionParamErrors, setFunctionParamErrors] = useState({});
+  const [rawCallMode, setRawCallMode] = useState(false);
+  const [rawFunctionName, setRawFunctionName] = useState('');
+  const [rawArgsJson, setRawArgsJson] = useState('[]');
+  const [rawCallError, setRawCallError] = useState('');
   const [callResult, setCallResult] = useState(null);
   const [eventSync, setEventSync] = useState({ live: false, lastLedger: null, error: null });
   const [eventCursor, setEventCursor] = useState(null);
+  const [functionDiscovery, setFunctionDiscovery] = useState({ loading: false, source: 'example', error: null });
 
   // AI state
   const [apiKey, setApiKey] = useState('');
@@ -83,6 +98,38 @@ function IDE({ onBackToLanding }) {
   const eventCursorRef = useRef(null);
   const pollTimerRef = useRef(null);
   const wallets = getAvailableWallets();
+
+  const applyFallbackFunctions = (errorMessage = null) => {
+    const exampleFallback = normalizeFunctionDefinitions(getExample(selectedExample)?.functions || []);
+    setAvailableFunctions(exampleFallback);
+    setSelectedFunction((prev) => exampleFallback.find((fn) => fn.name === prev?.name) || null);
+    setFunctionParams({});
+    setFunctionParamErrors({});
+    setFunctionDiscovery({ loading: false, source: 'example', error: errorMessage });
+  };
+
+  const discoverContractFunctions = async (contractId) => {
+    if (!contractId) return;
+
+    setFunctionDiscovery({ loading: true, source: 'network', error: null });
+
+    try {
+      const discovered = await getContractFunctions(contractId);
+
+      if (discovered.length > 0) {
+        setAvailableFunctions(discovered);
+        setSelectedFunction((prev) => discovered.find((fn) => fn.name === prev?.name) || null);
+        setFunctionParams({});
+        setFunctionParamErrors({});
+        setFunctionDiscovery({ loading: false, source: 'network', error: null });
+        return;
+      }
+
+      applyFallbackFunctions('No callable functions were found in contract spec.');
+    } catch (error) {
+      applyFallbackFunctions(error.message);
+    }
+  };
 
   // Restore cached deploy-related UI state.
   useEffect(() => {
@@ -104,92 +151,16 @@ function IDE({ onBackToLanding }) {
     eventCursorRef.current = eventCursor;
   }, [eventCursor]);
 
-  useEffect(() => {
-    if (!deployedContract?.id) {
-      setEventCursor(null);
-      setEventSync({ live: false, lastLedger: null, error: null });
-      return;
-    }
-
-    const cursor = readEventCursor(deployedContract.id);
-    setEventCursor(cursor);
-    eventCursorRef.current = cursor;
-  }, [deployedContract?.id]);
-
-  useEffect(() => {
-    if (!deployedContract?.id) return;
-
-    let cancelled = false;
-
-    const scheduleNextPoll = () => {
-      if (cancelled) return;
-      pollTimerRef.current = setTimeout(pollEvents, 5000);
-    };
-
-    const pollEvents = async () => {
-      try {
-        const response = await getContractEvents(deployedContract.id, {
-          cursor: eventCursorRef.current,
-          limit: 20,
-        });
-
-        if (cancelled) return;
-
-        if (response.cursor && response.cursor !== eventCursorRef.current) {
-          setEventCursor(response.cursor);
-          eventCursorRef.current = response.cursor;
-          writeEventCursor(deployedContract.id, response.cursor);
-        }
-
-        if (Array.isArray(response.events) && response.events.length > 0) {
-          const eventEntries = response.events.map((event) => ({
-            type: 'event',
-            eventId: event.id,
-            eventType: event.type,
-            contractId: event.contractId || deployedContract.id,
-            timestamp: event.ledgerClosedAt || new Date().toISOString(),
-            hash: event.txHash,
-            explorerUrl: getExplorerUrl(event.txHash),
-            topic: event.topicNative,
-            result: event.valueNative,
-          }));
-
-          setTransactions((prev) => {
-            const seen = new Set(prev.map((tx) => tx.eventId || tx.hash));
-            const incoming = eventEntries.filter((tx) => !seen.has(tx.eventId || tx.hash));
-            return incoming.length > 0 ? [...incoming, ...prev].slice(0, 50) : prev;
-          });
-
-          const latestEvent = eventEntries[0];
-          setCallResult({
-            status: 'success',
-            result: JSON.stringify(latestEvent.result, null, 2),
-          });
-        }
-
-        setEventSync({
-          live: true,
-          lastLedger: response.latestLedger || null,
-          error: null,
-        });
-      } catch (error) {
-        if (!cancelled) {
-          setEventSync((prev) => ({ ...prev, live: false, error: error.message }));
-        }
-      } finally {
-        scheduleNextPoll();
-      }
-    };
-
-    pollEvents();
-
-    return () => {
-      cancelled = true;
-      if (pollTimerRef.current) {
-        clearTimeout(pollTimerRef.current);
-      }
-    };
-  }, [deployedContract?.id]);
+  // Live contract event polling — extracted into useEventPolling hook.
+  // Deploy + wallet hooks pending extraction.
+  useEventPolling({
+    deployedContract,
+    setEventCursor,
+    eventCursorRef,
+    setEventSync,
+    setTransactions,
+    setCallResult,
+  });
 
   // Check for existing wallet connection on mount
   useEffect(() => {
@@ -207,7 +178,7 @@ function IDE({ onBackToLanding }) {
         console.error('Error checking wallet connection:', error);
       }
     };
-    
+
     checkWalletConnection();
   }, []);
 
@@ -217,7 +188,27 @@ function IDE({ onBackToLanding }) {
     if (example && example.code) {
       setCode(example.code);
     }
+
+    const fallbackFunctions = normalizeFunctionDefinitions(example?.functions || []);
+    setAvailableFunctions(fallbackFunctions);
+    setSelectedFunction(null);
+    setFunctionParams({});
+    setFunctionParamErrors({});
+    setRawCallMode(false);
+    setRawFunctionName('');
+    setRawArgsJson('[]');
+    setRawCallError('');
+    setFunctionDiscovery({ loading: false, source: 'example', error: null });
   }, [selectedExample]);
+
+  // Discover deployed contract functions from on-chain WASM spec.
+  useEffect(() => {
+    if (!deployedContract?.id) {
+      return;
+    }
+
+    discoverContractFunctions(deployedContract.id);
+  }, [deployedContract?.id, selectedExample]);
 
   const handleConnect = async () => {
     try {
@@ -239,7 +230,161 @@ function IDE({ onBackToLanding }) {
       setCode(example.code);
     }
     setSelectedFunction(null);
+    setFunctionParamErrors({});
+    setRawCallMode(false);
+    setRawFunctionName('');
+    setRawArgsJson('[]');
+    setRawCallError('');
     setCallResult(null);
+  };
+
+  const getTypeKind = (typeLabel = '') => {
+    const t = String(typeLabel).toLowerCase();
+
+    if (t === 'bool' || t === 'boolean') return 'bool';
+    if (t === 'address') return 'address';
+    if (t === 'symbol') return 'symbol';
+    if (t === 'bytes' || t === 'bytearray') return 'bytes';
+    if (t === 'string') return 'string';
+    if (t === 'u32' || t === 'i32' || t === 'u64' || t === 'i64' || t === 'u128' || t === 'i128') return 'integer';
+    if (t.startsWith('vec<') || t.startsWith('map<') || t.startsWith('tuple<') || t.includes('vec') || t.includes('map') || t.includes('tuple') || t.includes('struct') || t.includes('enum') || t.includes('udt')) return 'json';
+
+    return 'text';
+  };
+
+  const validateParamValue = (param, value) => {
+    const required = value !== undefined && value !== null ? String(value).trim() : '';
+    if (required === '') {
+      return 'This parameter is required.';
+    }
+
+    const typeKind = getTypeKind(param.type);
+    const normalizedType = String(param.type || '').toLowerCase();
+
+    if (typeKind === 'bool') {
+      const boolValue = required.toLowerCase();
+      if (!['true', 'false', '1', '0'].includes(boolValue)) {
+        return 'Use true or false.';
+      }
+      return null;
+    }
+
+    if (typeKind === 'address') {
+      try {
+        new StellarSdk.Address(required);
+      } catch {
+        return 'Invalid Stellar address.';
+      }
+      return null;
+    }
+
+    if (typeKind === 'integer') {
+      if (!/^-?\d+$/.test(required)) {
+        return 'Enter a whole number.';
+      }
+      if (normalizedType.startsWith('u') && required.startsWith('-')) {
+        return 'Unsigned integer must be zero or positive.';
+      }
+      return null;
+    }
+
+    if (typeKind === 'json') {
+      try {
+        JSON.parse(required);
+      } catch {
+        return 'Enter valid JSON for this parameter type.';
+      }
+      return null;
+    }
+
+    if (typeKind === 'bytes') {
+      try {
+        const parsed = JSON.parse(required);
+        if (!Array.isArray(parsed) || parsed.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+          return 'Bytes input must be JSON array of integers 0-255.';
+        }
+      } catch {
+        return 'Bytes input must be JSON array of integers 0-255.';
+      }
+      return null;
+    }
+
+    return null;
+  };
+
+  const validateFunctionArgs = (func, params) => {
+    const errors = {};
+
+    (func?.params || []).forEach((param) => {
+      const value = params[param.name];
+      const maybeError = validateParamValue(param, value);
+      if (maybeError) {
+        errors[param.name] = maybeError;
+      }
+    });
+
+    return errors;
+  };
+
+  const parseRawArgsToScVals = (jsonInput) => {
+    let parsed;
+
+    try {
+      parsed = JSON.parse(jsonInput);
+    } catch {
+      throw new Error('Raw args must be valid JSON array.');
+    }
+
+    if (!Array.isArray(parsed)) {
+      throw new Error('Raw args must be a JSON array.');
+    }
+
+    return parsed.map((arg) => {
+      if (arg && typeof arg === 'object' && !Array.isArray(arg) && typeof arg.__type === 'string') {
+        const typedValue = arg.value;
+        const typedKind = arg.__type.toLowerCase();
+
+        if (typedKind === 'address') {
+          return new StellarSdk.Address(String(typedValue)).toScVal();
+        }
+
+        if (typedKind === 'symbol') {
+          return StellarSdk.nativeToScVal(String(typedValue), { type: 'symbol' });
+        }
+
+        if (typedKind === 'string') {
+          return StellarSdk.nativeToScVal(String(typedValue), { type: 'string' });
+        }
+
+        if (typedKind === 'bool' || typedKind === 'boolean') {
+          return StellarSdk.nativeToScVal(Boolean(typedValue));
+        }
+
+        if (typedKind === 'bytes' || typedKind === 'bytearray') {
+          if (!Array.isArray(typedValue)) {
+            throw new Error('Typed bytes value must be an array of numbers.');
+          }
+          const byteArray = Uint8Array.from(typedValue);
+          return StellarSdk.nativeToScVal(byteArray, { type: 'bytes' });
+        }
+
+        if (['u32', 'i32', 'u64', 'i64'].includes(typedKind)) {
+          const numeric = Number(typedValue);
+          if (!Number.isInteger(numeric)) {
+            throw new Error(`Typed ${typedKind} value must be an integer.`);
+          }
+          return StellarSdk.nativeToScVal(numeric, { type: typedKind });
+        }
+
+        if (['u128', 'i128'].includes(typedKind)) {
+          return StellarSdk.nativeToScVal(BigInt(typedValue), { type: typedKind });
+        }
+
+        return StellarSdk.nativeToScVal(typedValue);
+      }
+
+      return StellarSdk.nativeToScVal(arg);
+    });
   };
 
   const handleDeploy = async () => {
@@ -255,7 +400,7 @@ function IDE({ onBackToLanding }) {
       // Step 1: Compile Rust to WASM
       console.log('Compiling contract:', selectedExample || 'custom');
       const compilationResult = await Compiler.compileContract(code, selectedExample);
-      
+
       if (compilationResult.status !== Compiler.CompilationStatus.SUCCESS) {
         throw new Error(compilationResult.error || 'Compilation failed');
       }
@@ -264,8 +409,8 @@ function IDE({ onBackToLanding }) {
         setDeployStatus({
           status: 'error',
           message: 'Compilation produced no WASM binary.\n\n' +
-                   'Make sure the compiler service is running:\n' +
-                   '  cd server && npm start'
+            'Make sure the compiler service is running:\n' +
+            '  cd server && npm start'
         });
         setLoading(false);
         return;
@@ -273,17 +418,17 @@ function IDE({ onBackToLanding }) {
 
       const wasmSize = compilationResult.wasm.length;
       setDeployStatus({ status: 'pending', message: `Step 2/4: Uploading WASM (${(wasmSize / 1024).toFixed(1)} KB)...`, progress: 35 });
-      
+
       // Step 2-3: Deploy contract to Stellar
       console.log('Deploying contract to Stellar Testnet...');
       setDeployStatus({ status: 'pending', message: 'Step 3/4: Deploying contract instance...', progress: 60 });
       const deployResult = await deployContract(compilationResult.wasm, publicKey);
-      
+
       setDeployStatus({ status: 'pending', message: 'Step 4/4: Confirming on network...', progress: 85 });
-      
+
       const example = selectedExample ? getExample(selectedExample) : null;
       const contractName = (example && example.name) ? example.name : 'Custom Contract';
-      
+
       setDeployedContract({
         id: deployResult.contractId,
         name: contractName,
@@ -318,30 +463,71 @@ function IDE({ onBackToLanding }) {
   };
 
   const handleCallFunction = async () => {
-    if (!selectedFunction) return;
-    
     if (!deployedContract) {
       alert('Please deploy a contract first');
       return;
     }
 
     try {
+      let functionName = '';
+      let args = [];
+
+      if (rawCallMode) {
+        setFunctionParamErrors({});
+        setRawCallError('');
+
+        functionName = rawFunctionName.trim();
+        if (!functionName) {
+          setRawCallError('Function name is required in raw mode.');
+          setCallResult({
+            status: 'error',
+            message: 'Provide a function name before executing raw call.',
+          });
+          return;
+        }
+
+        try {
+          args = parseRawArgsToScVals(rawArgsJson || '[]');
+        } catch (error) {
+          setRawCallError(error.message);
+          setCallResult({
+            status: 'error',
+            message: error.message,
+          });
+          return;
+        }
+      } else {
+        if (!selectedFunction) return;
+
+        const validationErrors = validateFunctionArgs(selectedFunction, functionParams);
+        setFunctionParamErrors(validationErrors);
+        setRawCallError('');
+
+        if (Object.keys(validationErrors).length > 0) {
+          setCallResult({
+            status: 'error',
+            message: 'Fix parameter validation errors before executing.',
+          });
+          return;
+        }
+
+        functionName = selectedFunction.name;
+        args = prepareFunctionArgs(selectedFunction, functionParams);
+      }
+
       setLoading(true);
       setCallResult({ status: 'pending', message: 'Calling function...' });
 
-      // Prepare function arguments (convert from functionParams)
-      const args = prepareFunctionArgs(selectedFunction, functionParams);
-      
-      console.log('Invoking contract function:', selectedFunction.name, 'with args:', args);
-      
+      console.log('Invoking contract function:', functionName, 'with args:', args);
+
       // Call the contract on-chain
       const result = await invokeContract(
         deployedContract.id,
-        selectedFunction.name,
+        functionName,
         args,
         publicKey
       );
-      
+
       setCallResult({
         status: 'success',
         result: JSON.stringify(result.result, null, 2)
@@ -349,8 +535,8 @@ function IDE({ onBackToLanding }) {
 
       setTransactions([{
         type: 'invoke',
-        function: selectedFunction.name,
-        params: functionParams,
+        function: functionName,
+        params: rawCallMode ? { raw: rawArgsJson } : functionParams,
         result: result.result,
         timestamp: new Date().toISOString(),
         hash: result.transactionHash,
@@ -368,31 +554,75 @@ function IDE({ onBackToLanding }) {
   };
 
   // Helper: Prepare function arguments for Soroban contract calls
+  const toScValFromInput = (value, typeLabel) => {
+    const normalizedType = (typeLabel || '').toLowerCase();
+
+    if (normalizedType === 'bool' || normalizedType === 'boolean') {
+      const boolValue = String(value).trim().toLowerCase();
+      return StellarSdk.nativeToScVal(boolValue === 'true' || boolValue === '1');
+    }
+
+    if (normalizedType === 'u32' || normalizedType === 'i32') {
+      return StellarSdk.nativeToScVal(parseInt(value, 10), { type: normalizedType });
+    }
+
+    if (normalizedType === 'u64' || normalizedType === 'i64' || normalizedType === 'u128' || normalizedType === 'i128') {
+      return StellarSdk.nativeToScVal(BigInt(value), { type: normalizedType });
+    }
+
+    if (normalizedType === 'string') {
+      return StellarSdk.nativeToScVal(value, { type: 'string' });
+    }
+
+    if (normalizedType === 'symbol') {
+      return StellarSdk.nativeToScVal(value, { type: 'symbol' });
+    }
+
+    if (normalizedType === 'bytes' || normalizedType === 'bytearray') {
+      const parsed = JSON.parse(value);
+      return StellarSdk.nativeToScVal(Uint8Array.from(parsed), { type: 'bytes' });
+    }
+
+    if (normalizedType === 'address') {
+      return new StellarSdk.Address(value).toScVal();
+    }
+
+    if (normalizedType.startsWith('vec<') || normalizedType.includes('vec')) {
+      const parsed = JSON.parse(value);
+      return StellarSdk.nativeToScVal(parsed);
+    }
+
+    if (normalizedType.startsWith('map<') || normalizedType.startsWith('tuple<') || normalizedType.includes('map') || normalizedType.includes('tuple') || normalizedType.includes('struct') || normalizedType.includes('enum') || normalizedType.includes('udt')) {
+      const parsed = JSON.parse(value);
+      return StellarSdk.nativeToScVal(parsed);
+    }
+
+    return StellarSdk.nativeToScVal(value);
+  };
+
   const prepareFunctionArgs = (func, params) => {
     // Convert parameters to Soroban ScVal format
     const args = [];
-    
+
     if (func.params && func.params.length > 0) {
       func.params.forEach(param => {
         const value = params[param.name];
-        
+
         if (value !== undefined && value !== '') {
-          // Convert based on type
-          if (param.type === 'i32' || param.type === 'u32') {
-            args.push(StellarSdk.nativeToScVal(parseInt(value), { type: param.type }));
-          } else if (param.type === 'String') {
-            args.push(StellarSdk.nativeToScVal(value, { type: 'string' }));
-          } else if (param.type === 'Address') {
-            args.push(new StellarSdk.Address(value).toScVal());
-          } else {
-            // Default: try to convert as-is
-            args.push(StellarSdk.nativeToScVal(value));
-          }
+          args.push(toScValFromInput(value, param.type));
         }
       });
     }
-    
+
     return args;
+  };
+
+  const handleRetryFunctionDiscovery = async () => {
+    if (!deployedContract?.id || functionDiscovery.loading) {
+      return;
+    }
+
+    await discoverContractFunctions(deployedContract.id);
   };
 
   // AI Functions
@@ -421,7 +651,7 @@ function IDE({ onBackToLanding }) {
 
     const userMessage = aiInput.trim();
     setAiInput('');
-    
+
     const newMessages = [...aiChatMessages, { role: 'user', content: userMessage }];
     setAiChatMessages(newMessages);
     setAiLoading(true);
@@ -429,12 +659,12 @@ function IDE({ onBackToLanding }) {
     try {
       const conversationHistory = newMessages.slice(-10); // Keep last 10 messages
       const response = await AI.chatWithAI(userMessage, conversationHistory);
-      
+
       setAiChatMessages([...newMessages, { role: 'assistant', content: response }]);
     } catch (error) {
-      setAiChatMessages([...newMessages, { 
-        role: 'assistant', 
-        content: `❌ Error: ${error.message}` 
+      setAiChatMessages([...newMessages, {
+        role: 'assistant',
+        content: `❌ Error: ${error.message}`
       }]);
     } finally {
       setAiLoading(false);
@@ -457,14 +687,14 @@ function IDE({ onBackToLanding }) {
 
     try {
       const explanation = await AI.explainCode(codeToExplain, selectedCode ? 'selected code' : null);
-      setAiChatMessages([...aiChatMessages, 
-        { role: 'user', content: `Explain this code:\n\`\`\`rust\n${codeToExplain.substring(0, 200)}${codeToExplain.length > 200 ? '...' : ''}\n\`\`\`` },
-        { role: 'assistant', content: explanation }
+      setAiChatMessages([...aiChatMessages,
+      { role: 'user', content: `Explain this code:\n\`\`\`rust\n${codeToExplain.substring(0, 200)}${codeToExplain.length > 200 ? '...' : ''}\n\`\`\`` },
+      { role: 'assistant', content: explanation }
       ]);
     } catch (error) {
-      setAiChatMessages([...aiChatMessages, { 
-        role: 'assistant', 
-        content: `❌ Error: ${error.message}` 
+      setAiChatMessages([...aiChatMessages, {
+        role: 'assistant',
+        content: `❌ Error: ${error.message}`
       }]);
     } finally {
       setAiLoading(false);
@@ -484,14 +714,14 @@ function IDE({ onBackToLanding }) {
 
     try {
       const debugInfo = await AI.debugCode(code);
-      setAiChatMessages([...aiChatMessages, 
-        { role: 'user', content: 'Debug this contract and find potential issues' },
-        { role: 'assistant', content: debugInfo }
+      setAiChatMessages([...aiChatMessages,
+      { role: 'user', content: 'Debug this contract and find potential issues' },
+      { role: 'assistant', content: debugInfo }
       ]);
     } catch (error) {
-      setAiChatMessages([...aiChatMessages, { 
-        role: 'assistant', 
-        content: `❌ Error: ${error.message}` 
+      setAiChatMessages([...aiChatMessages, {
+        role: 'assistant',
+        content: `❌ Error: ${error.message}`
       }]);
     } finally {
       setAiLoading(false);
@@ -511,14 +741,14 @@ function IDE({ onBackToLanding }) {
 
     try {
       const improvements = await AI.improveCode(code);
-      setAiChatMessages([...aiChatMessages, 
-        { role: 'user', content: 'Review and suggest improvements for this contract' },
-        { role: 'assistant', content: improvements }
+      setAiChatMessages([...aiChatMessages,
+      { role: 'user', content: 'Review and suggest improvements for this contract' },
+      { role: 'assistant', content: improvements }
       ]);
     } catch (error) {
-      setAiChatMessages([...aiChatMessages, { 
-        role: 'assistant', 
-        content: `❌ Error: ${error.message}` 
+      setAiChatMessages([...aiChatMessages, {
+        role: 'assistant',
+        content: `❌ Error: ${error.message}`
       }]);
     } finally {
       setAiLoading(false);
@@ -539,15 +769,15 @@ function IDE({ onBackToLanding }) {
       const newContract = await AI.generateContract(description);
       setCode(newContract);
       setSelectedExample(null); // Clear selected example for AI-generated code
-      setAiChatMessages([...aiChatMessages, 
-        { role: 'user', content: `Generate a contract: ${description}` },
-        { role: 'assistant', content: `✅ Contract generated! I've loaded it into the editor. Here's what I created:\n\n${newContract}` }
+      setAiChatMessages([...aiChatMessages,
+      { role: 'user', content: `Generate a contract: ${description}` },
+      { role: 'assistant', content: `✅ Contract generated! I've loaded it into the editor. Here's what I created:\n\n${newContract}` }
       ]);
       setActivePanel('editor');
     } catch (error) {
-      setAiChatMessages([...aiChatMessages, { 
-        role: 'assistant', 
-        content: `❌ Error: ${error.message}` 
+      setAiChatMessages([...aiChatMessages, {
+        role: 'assistant',
+        content: `❌ Error: ${error.message}`
       }]);
     } finally {
       setAiLoading(false);
@@ -579,7 +809,7 @@ function IDE({ onBackToLanding }) {
           });
 
           const completion = await AI.completeCode(codeBefore, codeAfter);
-          
+
           return {
             items: [{
               insertText: completion,
@@ -595,7 +825,7 @@ function IDE({ onBackToLanding }) {
           return { items: [] };
         }
       },
-      freeInlineCompletions: () => {},
+      freeInlineCompletions: () => { },
     });
   };
 
@@ -603,635 +833,583 @@ function IDE({ onBackToLanding }) {
   const currentExample = selectedExample ? getExample(selectedExample) : null;
 
   return (
-    <div className="ide-app">
-      <div className="grain-overlay"></div>
+    <div className="ide-shell">
 
-      {/* IDE Header */}
+      {/* ── Header ─────────────────────────────────────────── */}
       <header className="ide-header">
-        <div className="brand">
-          <div className="brand-icon">
-            <img src="/Orbital-IDE.png" alt="Orbital IDE" />
+        <div className="header-brand">
+          <div className="header-logo">
+            <svg width="18" height="18" viewBox="0 0 38 38" fill="none">
+              <circle cx="19" cy="19" r="9" stroke="white" strokeWidth="2.5" fill="none" />
+              <circle cx="19" cy="4" r="2.5" fill="white" />
+              <circle cx="19" cy="34" r="2.5" fill="white" />
+              <circle cx="4" cy="19" r="2.5" fill="white" />
+              <circle cx="34" cy="19" r="2.5" fill="white" />
+            </svg>
           </div>
-          <h1 className="brand-title">
-            <span className="brand-name">Orbital</span>
-            <span className="brand-type">IDE</span>
-          </h1>
+          <div>
+            <div className="header-title">Orbital IDE</div>
+            <div className="header-subtitle">Soroban · Testnet</div>
+          </div>
         </div>
 
-        <div className="header-actions">
-          <div className="network-badge">TESTNET</div>
+        <div className="header-center">
+          <button onClick={() => setActivePanel('editor')} className={`header-nav-btn ${activePanel === 'editor' ? 'active' : ''}`}>
+            <Code2 size={14} /> Editor
+          </button>
+          <button onClick={() => setActivePanel('deploy')} className={`header-nav-btn ${activePanel === 'deploy' ? 'active' : ''}`}>
+            <Rocket size={14} /> Deploy
+          </button>
+          <button onClick={() => setActivePanel('interact')} className={`header-nav-btn ${activePanel === 'interact' ? 'active' : ''}`} disabled={!deployedContract} data-testid="nav-interact-btn">
+            <Zap size={14} /> Interact
+          </button>
+          <button onClick={() => setActivePanel('transactions')} className={`header-nav-btn ${activePanel === 'transactions' ? 'active' : ''}`}>
+            <History size={14} /> History
+          </button>
+          <button onClick={() => setActivePanel('ai')} className={`header-nav-btn ${activePanel === 'ai' ? 'active' : ''}`}>
+            <Bot size={14} /> AI
+          </button>
+        </div>
+
+        <div className="header-right">
           {!publicKey ? (
             <>
               <select
-                className="input input-mono"
+                className="wallet-select"
+                style={{ width: 140 }}
                 value={selectedWalletId}
                 onChange={(e) => setSelectedWalletId(e.target.value)}
                 disabled={loading}
-                style={{ minWidth: '150px', marginRight: '10px' }}
               >
-                {wallets.map((wallet) => (
-                  <option key={wallet.id} value={wallet.id}>
-                    {wallet.icon} {wallet.name}
-                  </option>
+                {wallets.map((w) => (
+                  <option key={w.id} value={w.id}>{w.icon} {w.name}</option>
                 ))}
               </select>
-              <button
-                onClick={handleConnect}
-                disabled={loading}
-                className="btn btn-primary"
-              >
-                {loading ? 'Connecting...' : 'Connect Wallet'}
+              <button onClick={handleConnect} disabled={loading} className="btn btn-primary btn-sm">
+                {loading ? <><span className="spinner" />&nbsp;Connecting</> : 'Connect Wallet'}
               </button>
             </>
           ) : (
-            <div className="connected-info">
-              <code className="connected-key">{publicKey.slice(0, 4)}...{publicKey.slice(-4)}</code>
-              <div className="status-dot"></div>
+            <div className="wallet-chip">
+              <span className="wallet-dot" />
+              {publicKey.slice(0, 4)}…{publicKey.slice(-4)}
             </div>
           )}
+          <button onClick={onBackToLanding} className="btn btn-ghost btn-sm" title="Back to landing">
+            <ArrowLeft size={14} />
+          </button>
         </div>
       </header>
 
-      {/* IDE Layout */}
-      <div className="ide-layout">
-        {/* Sidebar */}
+      {/* ── Body ───────────────────────────────────────────── */}
+      <div className="ide-body">
+
+        {/* ── Sidebar ──────────────────────────────────────── */}
         <aside className="ide-sidebar">
           <div className="sidebar-section">
-            <h3 className="sidebar-title">Contract Examples</h3>
-            <div className="example-list">
-              {examples.map(example => (
-                <button
-                  key={example.id}
-                  onClick={() => handleExampleChange(example.id)}
-                  className={`example-item ${selectedExample === example.id ? 'active' : ''}`}
-                >
-                  <div className="example-name">{example.name}</div>
-                  <div className="example-desc">{example.description}</div>
-                  <div className={`difficulty difficulty-${example.difficulty.toLowerCase()}`}>
-                    {example.difficulty}
-                  </div>
-                </button>
-              ))}
-            </div>
+            <div className="sidebar-label">Contract Examples</div>
+          </div>
+          <div className="sidebar-examples">
+            {examples.map((ex) => (
+              <div
+                key={ex.id}
+                className={`example-card ${selectedExample === ex.id ? 'active' : ''}`}
+                onClick={() => handleExampleChange(ex.id)}
+              >
+                <div className="example-name">{ex.name}</div>
+                <div className="example-desc">{ex.description}</div>
+                <span className={`difficulty-badge difficulty-${(ex.difficulty || 'beginner').toLowerCase()}`}>
+                  {ex.difficulty}
+                </span>
+              </div>
+            ))}
           </div>
 
           {deployedContract && (
-            <div className="sidebar-section">
-              <h3 className="sidebar-title">Deployed Contract</h3>
-              <div className="deployed-contract">
-                <div className="contract-name">{deployedContract.name}</div>
-                <code className="contract-id">{deployedContract.id}</code>
-                <a
-                  href={`https://stellar.expert/explorer/testnet/contract/${deployedContract.id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn btn-ghost btn-small"
-                >
-                  View on Explorer →
+            <div className="sidebar-section" style={{ borderTop: '1px solid var(--border)' }}>
+              <div className="sidebar-label">Active Contract</div>
+              <div className="contract-card" style={{ margin: 0 }}>
+                <div className="contract-label">{deployedContract.name}</div>
+                <div className="contract-id">{deployedContract.id.slice(0, 12)}…</div>
+                <a href={getExplorerContractUrl(deployedContract.id)} target="_blank" rel="noopener noreferrer" className="link" style={{ display: 'block', marginTop: 6 }}>
+                  Explorer →
                 </a>
               </div>
             </div>
           )}
         </aside>
 
-        {/* Main Content */}
-        <main className="ide-main">
-          {/* Panel Tabs */}
-          <div className="panel-tabs">
-            <button
-              onClick={() => setActivePanel('editor')}
-              className={`panel-tab ${activePanel === 'editor' ? 'active' : ''}`}
-            >
-              <Code2 size={16} /> Editor
+        {/* ── Editor ───────────────────────────────────────── */}
+        <div className="ide-editor">
+          <div className="editor-toolbar">
+            <span className="editor-filename">
+              {currentExample ? `${currentExample.name.toLowerCase().replace(/ /g, '_')}.rs` : 'custom_contract.rs'}
+            </span>
+            <span className="editor-lang-tag">Rust · Soroban</span>
+            <div style={{ flex: 1 }} />
+            <button onClick={handleExplainCode} className="btn btn-ghost btn-sm" disabled={aiLoading} title="AI Explain">
+              <Lightbulb size={13} /> Explain
             </button>
-            <button
-              onClick={() => setActivePanel('ai')}
-              className={`panel-tab ${activePanel === 'ai' ? 'active' : ''}`}
-              title="AI Coding Assistant"
-            >
-              <Bot size={16} /> AI Assistant
+            <button onClick={handleDebugCode} className="btn btn-ghost btn-sm" disabled={aiLoading} title="AI Debug">
+              <Bug size={13} /> Debug
             </button>
-            <button
-              onClick={() => setActivePanel('deploy')}
-              className={`panel-tab ${activePanel === 'deploy' ? 'active' : ''}`}
-            >
-              <Rocket size={16} /> Deploy
+            <button onClick={handleImproveCode} className="btn btn-ghost btn-sm" disabled={aiLoading} title="AI Improve">
+              <Sparkles size={13} /> Improve
             </button>
-            <button
-              onClick={() => setActivePanel('interact')}
-              className={`panel-tab ${activePanel === 'interact' ? 'active' : ''}`}
-              disabled={!deployedContract}
-            >
-              <Zap size={16} /> Interact
-            </button>
-            <button
-              onClick={() => setActivePanel('transactions')}
-              className={`panel-tab ${activePanel === 'transactions' ? 'active' : ''}`}
-            >
-              <History size={16} /> History
+            <button onClick={() => setActivePanel('deploy')} className="btn btn-primary btn-sm">
+              <Rocket size={13} /> Deploy
             </button>
           </div>
+          <div className="editor-wrap">
+            <Editor
+              height="100%"
+              defaultLanguage="rust"
+              value={code}
+              onChange={(value) => setCode(value)}
+              onMount={handleEditorMount}
+              theme="vs-dark"
+              options={{
+                minimap: { enabled: false },
+                fontSize: 13,
+                fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                lineNumbers: 'on',
+                roundedSelection: false,
+                scrollBeyondLastLine: false,
+                automaticLayout: true,
+                inlineSuggest: { enabled: true },
+                quickSuggestions: false,
+                padding: { top: 12, bottom: 12 },
+              }}
+            />
+          </div>
+        </div>
 
-          {/* Editor Panel */}
-          {activePanel === 'editor' && (
-            <div className="panel-content">
-              <div className="editor-header">
-                <h2 className="panel-title">
-                  {currentExample ? currentExample.name : (
-                    <span style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
-                      <Bot size={20} /> AI Generated Contract
-                    </span>
-                  )}
-                </h2>
-                <p className="panel-desc">
-                  {currentExample ? currentExample.description : 'Custom contract generated by AI Assistant'}
-                </p>
-              </div>
-              <div className="editor-container">
-                <Editor
-                  height="60vh"
-                  defaultLanguage="rust"
-                  value={code}
-                  onChange={(value) => setCode(value)}
-                  onMount={handleEditorMount}
-                  theme="vs-dark"
-                  options={{
-                    minimap: { enabled: false },
-                    fontSize: 14,
-                    lineNumbers: 'on',
-                    roundedSelection: false,
-                    scrollBeyondLastLine: false,
-                    readOnly: false,
-                    automaticLayout: true,
-                    inlineSuggest: { enabled: true },
-                    quickSuggestions: false,
-                  }}
-                />
-              </div>
-              <div className="editor-footer">
-                <div className="editor-actions">
-                  {!currentExample && (
-                    <button
-                      onClick={() => handleExampleChange('counter')}
-                      className="btn btn-ghost btn-small"
-                      title="Back to example contracts"
-                    >
-                      ← Examples
-                    </button>
-                  )}
-                  <button
-                    onClick={handleExplainCode}
-                    className="btn btn-ghost btn-small"
-                    disabled={aiLoading}
-                    title="AI explain selected code or entire contract"
-                  >
-                    <Lightbulb size={14} /> Explain
-                  </button>
-                  <button
-                    onClick={handleDebugCode}
-                    className="btn btn-ghost btn-small"
-                    disabled={aiLoading}
-                    title="AI find and fix issues"
-                  >
-                    <Bug size={14} /> Debug
-                  </button>
-                  <button
-                    onClick={handleImproveCode}
-                    className="btn btn-ghost btn-small"
-                    disabled={aiLoading}
-                    title="AI suggest improvements"
-                  >
-                    <Sparkles size={14} /> Improve
-                  </button>
-                </div>
-                <button
-                  onClick={() => setActivePanel('deploy')}
-                  className="btn btn-primary"
-                >
-                  Deploy Contract →
-                </button>
-              </div>
-            </div>
-          )}
+        {/* ── Right Panel ──────────────────────────────────── */}
+        <div className="ide-panel">
 
-          {/* AI Assistant Panel */}
-          {activePanel === 'ai' && (
-            <div className="panel-content ai-panel">
-              <div className="ai-header">
-                <h2 className="panel-title" style={{display: 'flex', alignItems: 'center', gap: '12px'}}>
-                  <Bot size={24} /> AI Coding Assistant
-                </h2>
-                <button
-                  onClick={() => setShowApiKeyModal(true)}
-                  className="btn btn-ghost btn-small"
-                  title="Configure AI settings"
-                >
-                  <Settings size={14} /> {AI.isConfigured() ? 'API Key Set' : 'Set API Key'}
-                </button>
-              </div>
+          {/* Panel Tabs */}
+          <div className="panel-tabs">
+            {[
+              { id: 'deploy', icon: <Rocket size={13} />, label: 'Deploy' },
+              { id: 'interact', icon: <Zap size={13} />, label: 'Interact' },
+              { id: 'transactions', icon: <History size={13} />, label: 'History' },
+              { id: 'ai', icon: <Bot size={13} />, label: 'AI' },
+            ].map(({ id, icon, label }) => (
+              <button
+                key={id}
+                data-testid={`panel-tab-${id}`}
+                className={`panel-tab ${activePanel === id ? 'active' : ''}`}
+                onClick={() => setActivePanel(id)}
+                disabled={id === 'interact' && !deployedContract}
+              >
+                {icon} {label}
+              </button>
+            ))}
+          </div>
 
-              <div className="ai-chat-container">
-                <div className="ai-messages">
-                  {aiChatMessages.length === 0 && !AI.isConfigured() && (
-                    <div className="ai-welcome">
-                      <h3 style={{display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px'}}>
-                        Welcome to AI Assistant! <Rocket size={24} />
-                      </h3>
-                      <p>Set your Groq API key to get started.</p>
-                      <button
-                        onClick={() => setShowApiKeyModal(true)}
-                        className="btn btn-primary"
-                      >
-                        Configure API Key
-                      </button>
-                      <p className="ai-info">
-                        Get a free API key at <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer">console.groq.com</a>
-                      </p>
-                    </div>
-                  )}
-                  
-                  {aiChatMessages.map((msg, idx) => (
-                    <div key={idx} className={`ai-message ai-message-${msg.role}`}>
-                      <div className="ai-message-avatar">
-                        {msg.role === 'user' ? '👤' : <Bot size={20} />}
-                      </div>
-                      <div className="ai-message-content">
-                        <pre className="ai-message-text">{msg.content}</pre>
-                      </div>
-                    </div>
-                  ))}
-
-                  {aiLoading && (
-                    <div className="ai-message ai-message-assistant">
-                      <div className="ai-message-avatar"><Bot size={20} /></div>
-                      <div className="ai-message-content">
-                        <div className="ai-loading">Thinking...</div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="ai-input-container">
-                  <div className="ai-quick-actions">
-                    <button
-                      onClick={() => {
-                        setAiInput('How do I create a token contract in Soroban?');
-                      }}
-                      className="quick-action"
-                      disabled={aiLoading || !AI.isConfigured()}
-                    >
-                      <Coins size={14} /> Token Contract
-                    </button>
-                    <button
-                      onClick={() => {
-                        setAiInput('Generate a simple NFT contract with mint and transfer functions');
-                        setTimeout(() => {
-                          const desc = 'a simple NFT contract with mint and transfer functions';
-                          handleGenerateContract(desc);
-                        }, 100);
-                      }}
-                      className="quick-action"
-                      disabled={aiLoading || !AI.isConfigured()}
-                    >
-                      <Image size={14} /> NFT Contract
-                    </button>
-                    <button
-                      onClick={() => {
-                        setAiInput('What are Soroban storage best practices?');
-                      }}
-                      className="quick-action"
-                      disabled={aiLoading || !AI.isConfigured()}
-                    >
-                      <Package size={14} /> Storage Tips
-                    </button>
-                  </div>
-
-                  <div className="ai-input-box">
-                    <textarea
-                      value={aiInput}
-                      onChange={(e) => setAiInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          handleAiChat();
-                        }
-                      }}
-                      placeholder={AI.isConfigured() ? "Ask me anything about Soroban contracts..." : "Configure API key first..."}
-                      className="ai-textarea"
-                      disabled={!AI.isConfigured() || aiLoading}
-                      rows="3"
-                    />
-                    <button
-                      onClick={handleAiChat}
-                      disabled={!aiInput.trim() || aiLoading || !AI.isConfigured()}
-                      className="btn btn-primary ai-send-btn"
-                    >
-                      Send ↗
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Deploy Panel */}
+          {/* ── Deploy Panel ────────────────────────────── */}
           {activePanel === 'deploy' && (
             <div className="panel-content">
-              <h2 className="panel-title">Deploy Contract</h2>
-              
-              <div className="deploy-info">
-                <div className="info-row">
-                  <label>Contract:</label>
-                  <span>{currentExample ? currentExample.name : 'AI Generated Contract'}</span>
+              <div className="section-header">Deploy to Testnet</div>
+
+              {/* Info row */}
+              <div className="alert alert-info" style={{ marginBottom: 14 }}>
+                <div>
+                  <strong>{currentExample ? currentExample.name : 'Custom Contract'}</strong>
+                  {' · '}Stellar Testnet
+                  {publicKey && <><br /><span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{publicKey.slice(0, 8)}…{publicKey.slice(-8)}</span></>}
                 </div>
-                <div className="info-row">
-                  <label>Network:</label>
-                  <span>Stellar Testnet</span>
-                </div>
-                {publicKey && (
-                  <div className="info-row">
-                    <label>Deployer:</label>
-                    <code>{publicKey.slice(0, 8)}...{publicKey.slice(-8)}</code>
-                  </div>
-                )}
               </div>
 
-              <div className="deploy-actions">
-                <button
-                  onClick={handleDeploy}
-                  disabled={loading || !publicKey}
-                  className="btn btn-primary btn-large"
-                >
-                  {loading ? 'Deploying...' : (<><Rocket size={18} /> Deploy to Testnet</>)}
-                </button>
-                {!publicKey && (
-                  <p className="help-text">Please connect your wallet to deploy</p>
-                )}
-              </div>
+              {!publicKey && (
+                <div className="alert alert-warning" style={{ marginBottom: 12 }}>
+                  Connect your wallet in the header to deploy.
+                </div>
+              )}
 
+              <button
+                onClick={handleDeploy}
+                disabled={loading || !publicKey}
+                className="btn btn-primary w-full btn-lg"
+                style={{ width: '100%', justifyContent: 'center' }}
+              >
+                {loading
+                  ? <><span className="spinner" /> Deploying…</>
+                  : <><Rocket size={15} /> Deploy to Testnet</>
+                }
+              </button>
+
+              {/* Progress steps */}
               {deployStatus && (
-                <div className={`deploy-status status-${deployStatus.status}`}>
-                  <div className="status-message">{deployStatus.message}</div>
-                  {deployStatus.contractId && (
-                    <code className="contract-id">{deployStatus.contractId}</code>
+                <>
+                  <div className="deploy-steps" style={{ marginTop: 14 }}>
+                    {[
+                      { label: 'Compile contract', pct: 25 },
+                      { label: 'Upload WASM', pct: 50 },
+                      { label: 'Deploy instance', pct: 75 },
+                      { label: 'Confirm on-chain', pct: 100 },
+                    ].map(({ label, pct }) => {
+                      const progress = deployStatus.progress || 0;
+                      const isDone = progress >= pct;
+                      const isActive = progress >= pct - 25 && !isDone && deployStatus.status === 'pending';
+                      return (
+                        <div key={label} className={`deploy-step ${isDone ? 'done' : isActive ? 'active' : ''}`}>
+                          <div className="step-icon">{isDone ? '✓' : isActive ? '↻' : (pct / 25)}</div>
+                          {label}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {deployStatus.status !== 'pending' && (
+                    <div className={`alert alert-${deployStatus.status === 'success' ? 'success' : 'error'}`} style={{ marginTop: 10 }}>
+                      <pre>{deployStatus.message}</pre>
+                    </div>
                   )}
-                </div>
+
+                  {deployStatus.contractId && (
+                    <div className="contract-card">
+                      <div className="contract-label">✓ Contract Deployed</div>
+                      <div className="contract-id">{deployStatus.contractId}</div>
+                    </div>
+                  )}
+
+                  {deployStatus.progress != null && (
+                    <div className="progress-bar">
+                      <div className="progress-fill" style={{ width: `${deployStatus.progress}%` }} />
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
 
-          {/* Interact Panel */}
+          {/* ── Interact Panel ──────────────────────────── */}
           {activePanel === 'interact' && (
             <div className="panel-content">
-              <h2 className="panel-title">Call Contract Functions</h2>
-              {deployedContract && (
-                <p className="help-text" style={{ marginBottom: '14px' }}>
-                  Event Sync: {eventSync.live ? 'LIVE' : 'RECONNECTING'}
-                  {eventSync.lastLedger ? ` · Ledger ${eventSync.lastLedger}` : ''}
-                  {eventSync.error ? ` · ${eventSync.error}` : ''}
-                </p>
-              )}
-
-              {deployedContract ? (
-                <>
-                  <div className="function-selector">
-                    <label className="field-label">Select Function:</label>
-                    <select
-                      value={selectedFunction?.name || ''}
-                      onChange={(e) => {
-                        const func = currentExample.functions.find(f => f.name === e.target.value);
-                        setSelectedFunction(func);
-                        setFunctionParams({});
-                        setCallResult(null);
-                      }}
-                      className="input"
-                    >
-                      <option value="">-- Choose a function --</option>
-                      {currentExample.functions.map(func => (
-                        <option key={func.name} value={func.name}>
-                          {func.name}() → {func.returns}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {selectedFunction && (
-                    <>
-                      <div className="function-details">
-                        <h3 className="function-name">{selectedFunction.name}()</h3>
-                        <p className="function-desc">{selectedFunction.description}</p>
-                        
-                        {selectedFunction.params.length > 0 && (
-                          <div className="function-params">
-                            <h4>Parameters:</h4>
-                            {selectedFunction.params.map((param, idx) => (
-                              <div key={idx} className="param-field">
-                                <label className="field-label">{param}</label>
-                                <input
-                                  type="text"
-                                  className="input input-mono"
-                                  placeholder={`Enter ${param}`}
-                                  onChange={(e) => setFunctionParams({
-                                    ...functionParams,
-                                    [param]: e.target.value
-                                  })}
-                                />
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        <button
-                          onClick={handleCallFunction}
-                          disabled={loading}
-                          className="btn btn-primary"
-                        >
-                          {loading ? 'Calling...' : (<><Zap size={16} /> Execute Function</>)}
-                        </button>
-                      </div>
-
-                      {callResult && (
-                        <div className={`call-result result-${callResult.status}`}>
-                          <h4>Result:</h4>
-                          {callResult.result ? (
-                            <pre className="result-output">{callResult.result}</pre>
-                          ) : (
-                            <div className="result-message">{callResult.message}</div>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  )}
-                </>
-              ) : (
+              {!deployedContract ? (
                 <div className="empty-state">
-                  <p>Deploy a contract first to interact with it</p>
-                  <button
-                    onClick={() => setActivePanel('deploy')}
-                    className="btn btn-primary"
-                  >
+                  <div className="empty-icon"><Zap size={20} color="var(--text-muted)" /></div>
+                  <h4>No Contract Deployed</h4>
+                  <p>Deploy a contract first to interact with it.</p>
+                  <button onClick={() => setActivePanel('deploy')} className="btn btn-primary btn-sm" style={{ marginTop: 8 }}>
                     Go to Deploy
                   </button>
                 </div>
+              ) : (
+                <>
+                  {/* Event sync */}
+                  <div className={`event-sync ${eventSync.live ? 'live' : 'offline'}`}>
+                    <span className={`wallet-dot`} style={{ background: eventSync.live ? 'var(--success)' : 'var(--text-muted)' }} />
+                    {eventSync.live ? `Live · Ledger ${eventSync.lastLedger || '—'}` : 'Reconnecting…'}
+                  </div>
+
+                  {/* Function discovery badge */}
+                  {!functionDiscovery.loading && (
+                    <div className={`discovery-badge ${functionDiscovery.source === 'network' ? 'network' : 'example'}`}>
+                      {functionDiscovery.source === 'network' ? '⬡ Functions: On-chain spec' : '⚠ Functions: Example metadata fallback'}
+                    </div>
+                  )}
+                  {functionDiscovery.error && (
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>{functionDiscovery.error} —{' '}
+                      <button onClick={handleRetryFunctionDiscovery} className="btn btn-ghost btn-sm" disabled={functionDiscovery.loading} style={{ padding: '2px 8px', fontSize: 11 }}>
+                        Retry
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Raw call toggle */}
+                  <label className="toggle-row">
+                    <input
+                      type="checkbox"
+                      aria-label="Use Raw Call Mode"
+                      checked={rawCallMode}
+                      onChange={(e) => {
+                        const enabled = e.target.checked;
+                        setRawCallMode(enabled);
+                        setRawCallError('');
+                        setFunctionParamErrors({});
+                        setCallResult(null);
+                        if (!enabled) { setRawFunctionName(''); setRawArgsJson('[]'); }
+                      }}
+                    />
+                    Use Raw Call Mode
+                  </label>
+
+                  {rawCallMode ? (
+                    <div className="raw-call-section">
+                      <div className="section-header">Raw Contract Call</div>
+                      <div className="param-item" style={{ marginBottom: 8 }}>
+                        <label className="param-label" htmlFor="raw-function-name">Function Name</label>
+                        <input
+                          id="raw-function-name"
+                          type="text"
+                          className={`param-input ${rawCallError && !rawFunctionName.trim() ? 'error' : ''}`}
+                          placeholder="e.g. increment"
+                          value={rawFunctionName}
+                          onChange={(e) => setRawFunctionName(e.target.value)}
+                        />
+                      </div>
+                      <div className="param-item" style={{ marginBottom: 8 }}>
+                        <label className="param-label" htmlFor="raw-json-args">Raw JSON Args</label>
+                        <textarea
+                          id="raw-json-args"
+                          aria-label="Raw JSON Args"
+                          className={`param-input ${rawCallError ? 'error' : ''}`}
+                          placeholder='[] or [{"__type":"address","value":"G..."}]'
+                          rows={4}
+                          value={rawArgsJson}
+                          onChange={(e) => setRawArgsJson(e.target.value)}
+                          style={{ resize: 'vertical' }}
+                        />
+                      </div>
+                      {rawCallError && <div className="param-error" style={{ marginBottom: 8 }}>{rawCallError}</div>}
+                      <button onClick={handleCallFunction} disabled={loading} className="btn btn-accent w-full" style={{ width: '100%', justifyContent: 'center' }}>
+                        {loading ? <><span className="spinner" /> Calling…</> : <><Zap size={13} /> Execute Raw Call</>}
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="fn-select-wrap">
+                        <select
+                          className="fn-select"
+                          value={selectedFunction?.name || ''}
+                          onChange={(e) => {
+                            const func = availableFunctions.find((f) => f.name === e.target.value);
+                            setSelectedFunction(func);
+                            setFunctionParams({});
+                            setFunctionParamErrors({});
+                            setCallResult(null);
+                          }}
+                        >
+                          <option value="">— Choose a function —</option>
+                          {availableFunctions.map((fn) => (
+                            <option key={fn.name} value={fn.name}>{fn.name}() → {fn.returns}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {selectedFunction && selectedFunction.params.length > 0 && (
+                        <div className="param-group">
+                          {selectedFunction.params.map((param, idx) => (
+                            <div key={idx} className="param-item">
+                              <label className="param-label">
+                                {param.name}
+                                <span className="type-badge">{param.type}</span>
+                              </label>
+                              {getTypeKind(param.type) === 'bool' ? (
+                                <select
+                                  className={`param-input ${functionParamErrors[param.name] ? 'error' : ''}`}
+                                  value={functionParams[param.name] || ''}
+                                  onChange={(e) => setFunctionParams({ ...functionParams, [param.name]: e.target.value })}
+                                >
+                                  <option value="">— Select —</option>
+                                  <option value="true">true</option>
+                                  <option value="false">false</option>
+                                </select>
+                              ) : getTypeKind(param.type) === 'json' ? (
+                                <textarea
+                                  className={`param-input ${functionParamErrors[param.name] ? 'error' : ''}`}
+                                  placeholder={`JSON for ${param.type}`}
+                                  value={functionParams[param.name] || ''}
+                                  onChange={(e) => setFunctionParams({ ...functionParams, [param.name]: e.target.value })}
+                                  rows={3}
+                                  style={{ resize: 'vertical' }}
+                                />
+                              ) : (
+                                <input
+                                  type="text"
+                                  inputMode={getTypeKind(param.type) === 'integer' ? 'numeric' : 'text'}
+                                  className={`param-input ${functionParamErrors[param.name] ? 'error' : ''}`}
+                                  placeholder={`Enter ${param.type}`}
+                                  value={functionParams[param.name] || ''}
+                                  onChange={(e) => setFunctionParams({ ...functionParams, [param.name]: e.target.value })}
+                                />
+                              )}
+                              {functionParamErrors[param.name] && (
+                                <div className="param-error">{functionParamErrors[param.name]}</div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {selectedFunction && (
+                        <button onClick={handleCallFunction} disabled={loading} className="btn btn-primary w-full" style={{ width: '100%', justifyContent: 'center' }}>
+                          {loading ? <><span className="spinner" /> Calling…</> : <><Zap size={13} /> Execute Function</>}
+                        </button>
+                      )}
+                    </>
+                  )}
+
+                  {callResult && (
+                    <div className={`result-box ${callResult.status}`} style={{ marginTop: 12 }}>
+                      {callResult.result ?? callResult.message}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
 
-          {/* Transactions Panel */}
+          {/* ── History Panel ───────────────────────────── */}
           {activePanel === 'transactions' && (
             <div className="panel-content">
-              <h2 className="panel-title">Transaction History</h2>
-
+              <div className="section-header">Transaction History</div>
               {transactions.length === 0 ? (
                 <div className="empty-state">
-                  <p>No transactions yet</p>
+                  <div className="empty-icon"><History size={20} color="var(--text-muted)" /></div>
+                  <h4>No Transactions Yet</h4>
+                  <p>Deploy and interact with a contract to see activity here.</p>
                 </div>
               ) : (
-                <div className="transaction-list">
+                <div className="history-list">
                   {transactions.map((tx, idx) => (
-                    <div key={idx} className="transaction-item">
-                      <div className="tx-type">
-                        {tx.type === 'deploy' ? <Rocket size={16} /> : <Zap size={16} />} {tx.type}
+                    <div key={idx} className="history-item">
+                      <div className="history-header">
+                        <div className="history-type">
+                          <span className={`type-dot ${tx.type}`} />
+                          {tx.type === 'deploy' ? <Rocket size={12} /> : tx.type === 'event' ? <Sparkles size={12} /> : <Zap size={12} />}
+                          {tx.type}
+                          {tx.function && ` · ${tx.function}()`}
+                        </div>
+                        <span className="history-time">{new Date(tx.timestamp).toLocaleTimeString()}</span>
                       </div>
-                      <div className="tx-details">
-                        {tx.type === 'deploy' ? (
-                          <>
-                            <div>Contract: <code>{tx.contractId}</code></div>
-                          </>
-                        ) : tx.type === 'event' ? (
-                          <>
-                            <div>Event Type: <code>{tx.eventType}</code></div>
-                            <div>Topic: <code>{JSON.stringify(tx.topic)}</code></div>
-                            <div>Value: <code>{JSON.stringify(tx.result)}</code></div>
-                          </>
-                        ) : (
-                          <>
-                            <div>Function: <code>{tx.function}</code></div>
-                            <div>Result: {tx.result}</div>
-                          </>
-                        )}
-                        <div className="tx-time">{new Date(tx.timestamp).toLocaleString()}</div>
-                      </div>
-                      <a
-                        href={tx.explorerUrl || `https://stellar.expert/explorer/testnet/tx/${tx.hash}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="tx-link"
-                      >
-                        View →
-                      </a>
+                      {tx.contractId && <div className="contract-id" style={{ marginTop: 4, fontSize: 10 }}>{tx.contractId.slice(0, 16)}…</div>}
+                      {tx.result != null && (
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 3 }}>
+                          Result: {JSON.stringify(tx.result)}
+                        </div>
+                      )}
+                      {(tx.explorerUrl || tx.hash) && (
+                        <a href={tx.explorerUrl || getExplorerTxUrl(tx.hash)} target="_blank" rel="noopener noreferrer" className="history-hash">
+                          {(tx.hash || '').slice(0, 12)}… ↗
+                        </a>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
             </div>
           )}
-        </main>
 
-        {/* Info Panel */}
-        <aside className="ide-right-panel">
-          <div className="info-section">
-            <h3 className="info-title" style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
-              <BookOpen size={18} /> About
-            </h3>
-            <p className="info-text">
-              Write, deploy, and test Soroban smart contracts directly in your browser. 
-              No local Rust installation required!
-            </p>
-          </div>
+          {/* ── AI Panel ────────────────────────────────── */}
+          {activePanel === 'ai' && (
+            <div className="panel-content" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <div className="section-header" style={{ margin: 0 }}><Bot size={13} /> AI Assistant</div>
+                <button onClick={() => setShowApiKeyModal(true)} className="btn btn-ghost btn-sm">
+                  <Settings size={12} /> {AI.isConfigured() ? 'Key Set ✓' : 'Add Key'}
+                </button>
+              </div>
 
-          <div className="info-section">
-            <h3 className="info-title" style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
-              <Target size={18} /> How It Works
-            </h3>
-            <ol className="info-list">
-              <li>Choose an example contract</li>
-              <li>Edit the Rust code in the editor</li>
-              <li>Connect your wallet</li>
-              <li>Deploy to Stellar Testnet</li>
-              <li>Interact with your contract</li>
-            </ol>
-          </div>
+              {!AI.isConfigured() && !aiChatMessages.length && (
+                <div className="alert alert-info" style={{ marginBottom: 12 }}>
+                  Add a free Groq API key to unlock AI features.{' '}
+                  <a href={EXTERNAL_LINKS.groqConsole} target="_blank" rel="noopener noreferrer" className="link">console.groq.com</a>
+                </div>
+              )}
 
-          <div className="info-section">
-            <h3 className="info-title" style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
-              <Lightbulb size={18} /> Tips
-            </h3>
-            <ul className="info-list">
-              <li>Start with the Counter example</li>
-              <li>Use testnet XLM from Friendbot</li>
-              <li>Check transaction history for results</li>
-            </ul>
-          </div>
+              <div className="ai-actions">
+                <button className="ai-action-btn" onClick={handleExplainCode} disabled={aiLoading || !AI.isConfigured()}>
+                  <Lightbulb size={13} /> Explain Code
+                </button>
+                <button className="ai-action-btn" onClick={handleDebugCode} disabled={aiLoading || !AI.isConfigured()}>
+                  <Bug size={13} /> Debug Code
+                </button>
+                <button className="ai-action-btn" onClick={handleImproveCode} disabled={aiLoading || !AI.isConfigured()}>
+                  <Sparkles size={13} /> Improve
+                </button>
+                <button className="ai-action-btn" onClick={() => {
+                  const desc = 'a token contract with transfer and mint';
+                  if (AI.isConfigured()) handleGenerateContract(desc);
+                  else setShowApiKeyModal(true);
+                }} disabled={aiLoading}>
+                  <ArrowRight size={13} /> Generate
+                </button>
+              </div>
 
-          <div className="info-section">
-            <h3 className="info-title" style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
-              <Link size={18} /> Resources
-            </h3>
-            <a href="https://soroban.stellar.org/docs" target="_blank" rel="noopener noreferrer" className="resource-link">
-              Soroban Docs →
-            </a>
-            <a href="https://friendbot.stellar.org/" target="_blank" rel="noopener noreferrer" className="resource-link">
-              Get Test XLM →
-            </a>
-            <a href="https://stellar.expert/explorer/testnet" target="_blank" rel="noopener noreferrer" className="resource-link">
-              Stellar Expert →
-            </a>
-          </div>
-        </aside>
+              <div className="ai-panel">
+                <div className="ai-messages">
+                  {aiChatMessages.map((msg, idx) => (
+                    <div key={idx} className={`msg msg-${msg.role}`}>
+                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'var(--font-ui)' }}>{msg.content}</pre>
+                    </div>
+                  ))}
+                  {aiLoading && (
+                    <div className="msg msg-assistant">
+                      <span className="spinner" style={{ marginRight: 6 }} /> Thinking…
+                    </div>
+                  )}
+                </div>
+
+                <div className="ai-input-row">
+                  <textarea
+                    className="ai-input"
+                    value={aiInput}
+                    onChange={(e) => setAiInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAiChat(); } }}
+                    placeholder={AI.isConfigured() ? 'Ask about Soroban…' : 'Configure API key first…'}
+                    disabled={!AI.isConfigured() || aiLoading}
+                    rows={2}
+                  />
+                  <button onClick={handleAiChat} disabled={!aiInput.trim() || aiLoading || !AI.isConfigured()} className="btn btn-primary btn-sm">
+                    ↗
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
       </div>
 
-      {/* API Key Modal */}
+      {/* ── Status Bar ─────────────────────────────────────── */}
+      <div className="ide-statusbar">
+        <span className="status-item ok">◉ Stellar Testnet</span>
+        {deployedContract && (
+          <span className="status-item ok">
+            Contract: {deployedContract.id.slice(0, 8)}…
+          </span>
+        )}
+        {eventSync.live && deployedContract && (
+          <span className="status-item ok">⬡ Events Live · Ledger {eventSync.lastLedger}</span>
+        )}
+        <span style={{ flex: 1 }} />
+        <span className="status-item">
+          <a href={getExplorerHomeUrl()} target="_blank" rel="noopener noreferrer">Stellar Expert ↗</a>
+        </span>
+        <span className="status-item">
+          <a href={EXTERNAL_LINKS.friendbot} target="_blank" rel="noopener noreferrer">Get Test XLM ↗</a>
+        </span>
+      </div>
+
+      {/* ── API Key Modal ───────────────────────────────────── */}
       {showApiKeyModal && (
         <div className="modal-overlay" onClick={() => setShowApiKeyModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h2 className="modal-title" style={{display: 'flex', alignItems: 'center', gap: '12px'}}>
-              <Settings size={24} /> AI Configuration
-            </h2>
-            <p className="modal-desc">
-              Enter your Groq API key to enable AI features. Get a free key at{' '}
-              <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer">
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Settings size={18} /> AI Configuration
+            </div>
+            <div className="modal-desc">
+              Enter your Groq API key to enable AI coding assistance.
+              Get a free key at{' '}
+              <a href={EXTERNAL_LINKS.groqConsole} target="_blank" rel="noopener noreferrer" className="link">
                 console.groq.com
               </a>
-            </p>
-            
-            <div className="form-field">
-              <label htmlFor="api-key">Groq API Key</label>
-              <input
-                id="api-key"
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="gsk_..."
-                className="input-text"
-                autoFocus
-              />
             </div>
-
-            <div className="modal-features">
-              <h4>AI Features:</h4>
-              <ul>
-                <li><Bot size={16} style={{display: 'inline', marginRight: '8px'}} />Chat Assistant - Ask questions about Soroban & Rust</li>
-                <li><Target size={16} style={{display: 'inline', marginRight: '8px'}} />Code Generation - Generate contracts from descriptions</li>
-                <li><Lightbulb size={16} style={{display: 'inline', marginRight: '8px'}} />Code Explanation - Understand what code does</li>
-                <li><Bug size={16} style={{display: 'inline', marginRight: '8px'}} />Debugging - Find and fix issues</li>
-                <li><Sparkles size={16} style={{display: 'inline', marginRight: '8px'}} />Improvements - Get optimization suggestions</li>
-                <li><Zap size={16} style={{display: 'inline', marginRight: '8px'}} />Inline Completion - Copilot-like autocomplete</li>
-              </ul>
-            </div>
-
+            <input
+              id="api-key"
+              type="password"
+              className="form-input"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="gsk_…"
+              autoFocus
+            />
             <div className="modal-actions">
-              <button
-                onClick={() => setShowApiKeyModal(false)}
-                className="btn btn-ghost"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveApiKey}
-                className="btn btn-primary"
-                disabled={!apiKey.trim()}
-              >
+              <button onClick={() => setShowApiKeyModal(false)} className="btn btn-secondary">Cancel</button>
+              <button onClick={handleSaveApiKey} disabled={!apiKey.trim()} className="btn btn-primary">
                 Save & Enable AI
               </button>
             </div>
@@ -1239,17 +1417,9 @@ function IDE({ onBackToLanding }) {
         </div>
       )}
 
-      <footer className="ide-footer">
-        <p>
-          Orbital IDE · Stellar Testnet · Built with ❤️ for the community
-          {' · '}
-          <button onClick={onBackToLanding} className="footer-link">
-            ← Back to Home
-          </button>
-        </p>
-      </footer>
     </div>
   );
 }
+
 
 export default App;

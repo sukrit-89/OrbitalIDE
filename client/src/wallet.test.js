@@ -13,7 +13,7 @@ import {
   connectWallet,
   disconnectWallet,
   signTransaction,
-} from './wallet';
+} from './services/wallet';
 
 describe('wallet error handling', () => {
   beforeEach(() => {

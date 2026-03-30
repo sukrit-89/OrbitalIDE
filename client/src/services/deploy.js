@@ -8,15 +8,216 @@
 import * as StellarSdk from '@stellar/stellar-sdk';
 import { Server as SorobanServer } from '@stellar/stellar-sdk/rpc';
 import { signTransaction } from './wallet';
+import { getExplorerTxUrl, getHorizonUrl, getSorobanRpcUrl } from './endpoints';
 
 // Soroban RPC Server for Testnet
-const sorobanServer = new SorobanServer('https://soroban-testnet.stellar.org');
+const sorobanServer = new SorobanServer(getSorobanRpcUrl());
 
 // Horizon server for account loading
-const horizonServer = new StellarSdk.Horizon.Server('https://horizon-testnet.stellar.org');
+const horizonServer = new StellarSdk.Horizon.Server(getHorizonUrl());
 
 // Network configuration
 const NETWORK_PASSPHRASE = StellarSdk.Networks.TESTNET;
+
+/**
+ * Check whether a simulation response is an error across SDK versions.
+ *
+ * @param {any} simulateResponse
+ * @returns {boolean}
+ */
+function isSimulationErrorResponse(simulateResponse) {
+    const checker =
+        SorobanServer?.Api?.isSimulationError ||
+        StellarSdk?.SorobanRpc?.Api?.isSimulationError ||
+        StellarSdk?.rpc?.Api?.isSimulationError;
+
+    if (typeof checker === 'function') {
+        return checker(simulateResponse);
+    }
+
+    return !!(simulateResponse && typeof simulateResponse === 'object' && simulateResponse.error);
+}
+
+/**
+ * Assemble and normalize a transaction with simulation data across SDK versions.
+ *
+ * @param {import('@stellar/stellar-sdk').Transaction} transaction
+ * @param {any} simulateResponse
+ * @returns {Promise<import('@stellar/stellar-sdk').Transaction>}
+ */
+async function assembleTransactionCompat(transaction, simulateResponse) {
+    const assembleFn =
+        StellarSdk?.SorobanRpc?.assembleTransaction ||
+        StellarSdk?.rpc?.assembleTransaction;
+
+    let preparedTransaction;
+
+    if (typeof assembleFn === 'function') {
+        preparedTransaction = assembleFn(transaction, simulateResponse);
+    } else if (typeof sorobanServer?.prepareTransaction === 'function') {
+        preparedTransaction = sorobanServer.prepareTransaction(transaction);
+    } else {
+        throw new Error('Soroban transaction assembly is not available in the installed stellar-sdk version.');
+    }
+
+    if (preparedTransaction && typeof preparedTransaction.then === 'function') {
+        preparedTransaction = await preparedTransaction;
+    }
+
+    // Some SDK variants return a TransactionBuilder from assembleTransaction.
+    if (preparedTransaction && typeof preparedTransaction.build === 'function') {
+        preparedTransaction = preparedTransaction.build();
+    }
+
+    if (!preparedTransaction || typeof preparedTransaction.toXDR !== 'function') {
+        throw new Error('Failed to prepare transaction in a signable format.');
+    }
+
+    return preparedTransaction;
+}
+
+/**
+ * Normalize a loose type label for UI and argument conversion.
+ *
+ * @param {string} typeLabel
+ * @returns {string}
+ */
+function normalizeTypeLabel(typeLabel) {
+    if (!typeLabel || typeof typeLabel !== 'string') {
+        return 'unknown';
+    }
+
+    return typeLabel.trim();
+}
+
+/**
+ * Normalize function parameter metadata shape.
+ *
+ * @param {any} param
+ * @param {number} index
+ * @returns {{name: string, type: string, label: string}}
+ */
+function normalizeFunctionParam(param, index) {
+    if (typeof param === 'string') {
+        const parts = param.split(':');
+        const name = (parts[0] || `arg${index + 1}`).trim();
+        const type = normalizeTypeLabel(parts.slice(1).join(':') || 'unknown');
+        return {
+            name,
+            type,
+            label: `${name}: ${type}`,
+        };
+    }
+
+    if (param && typeof param === 'object') {
+        const name = typeof param.name === 'string' && param.name
+            ? param.name.trim()
+            : `arg${index + 1}`;
+        const type = normalizeTypeLabel(param.type || 'unknown');
+        const label = typeof param.label === 'string' && param.label
+            ? param.label
+            : `${name}: ${type}`;
+
+        return {
+            name,
+            type,
+            label,
+        };
+    }
+
+    return {
+        name: `arg${index + 1}`,
+        type: 'unknown',
+        label: `arg${index + 1}: unknown`,
+    };
+}
+
+/**
+ * Normalize contract function metadata into a single shape used by the UI.
+ *
+ * @param {any[]} functions
+ * @returns {Array<{name: string, params: Array<{name: string, type: string, label: string}>, returns: string, description: string}>}
+ */
+export function normalizeFunctionDefinitions(functions) {
+    if (!Array.isArray(functions)) {
+        return [];
+    }
+
+    return functions
+        .map((fn, fnIndex) => {
+            const name = typeof fn?.name === 'string' && fn.name ? fn.name : `function_${fnIndex + 1}`;
+            const params = Array.isArray(fn?.params)
+                ? fn.params.map((param, paramIndex) => normalizeFunctionParam(param, paramIndex))
+                : [];
+
+            return {
+                name,
+                params,
+                returns: normalizeTypeLabel(fn?.returns || 'void'),
+                description: typeof fn?.description === 'string' ? fn.description : '',
+            };
+        })
+        .filter((fn) => !!fn.name);
+}
+
+/**
+ * Explicit enum map from XDR discriminant name → readable type label.
+ * This avoids fragile string manipulation and handles all Soroban primitives.
+ * Complex nested UDTs (Vec, Map, Struct, Enum, Tuple) fall back to a safe
+ * lower-cased strip — this is acceptable at Yellow/Orange belt level.
+ */
+const SPEC_TYPE_MAP = {
+    scSpecTypeU32: 'u32',
+    scSpecTypeI32: 'i32',
+    scSpecTypeU64: 'u64',
+    scSpecTypeI64: 'i64',
+    scSpecTypeU128: 'u128',
+    scSpecTypeI128: 'i128',
+    scSpecTypeU256: 'u256',
+    scSpecTypeI256: 'i256',
+    scSpecTypeBool: 'bool',
+    scSpecTypeVoid: 'void',
+    scSpecTypeError: 'error',
+    scSpecTypeBytes: 'bytes',
+    scSpecTypeString: 'string',
+    scSpecTypeSymbol: 'symbol',
+    scSpecTypeAddress: 'address',
+    scSpecTypeBytesN: 'bytesN',
+    scSpecTypeOption: 'option',
+    scSpecTypeResult: 'result',
+    scSpecTypeVec: 'vec',
+    scSpecTypeMap: 'map',
+    scSpecTypeTuple: 'tuple',
+    scSpecTypeUdt: 'udt',
+};
+
+/**
+ * Convert XDR spec type to a readable label for the interaction panel.
+ *
+ * @param {any} typeDef
+ * @returns {string}
+ */
+function specTypeToLabel(typeDef) {
+    try {
+        const switchValue = typeDef?.switch?.();
+        const switchName = switchValue?.name || switchValue?.toString?.() || '';
+
+        if (!switchName) {
+            return 'unknown';
+        }
+
+        // Fast-path: exact match in the enum map.
+        if (SPEC_TYPE_MAP[switchName]) {
+            return SPEC_TYPE_MAP[switchName];
+        }
+
+        // Fallback: strip the "scSpecType" prefix for any future/unmapped types.
+        const stripped = switchName.replace(/^scSpecType/, '');
+        return stripped && stripped !== switchName ? stripped.toLowerCase() : 'unknown';
+    } catch {
+        return 'unknown';
+    }
+}
 
 /**
  * Deploy a Soroban contract from WASM binary
@@ -83,12 +284,12 @@ async function uploadContractWasm(wasmBuffer, sourcePublicKey) {
         console.log('Simulating upload transaction...');
         const simulateResponse = await sorobanServer.simulateTransaction(transaction);
 
-        if (SorobanServer.Api.isSimulationError(simulateResponse)) {
+        if (isSimulationErrorResponse(simulateResponse)) {
             throw new Error(`Simulation failed: ${simulateResponse.error}`);
         }
 
         // Prepare transaction with simulation results
-        const preparedTransaction = StellarSdk.SorobanRpc.assembleTransaction(
+        const preparedTransaction = await assembleTransactionCompat(
             transaction,
             simulateResponse
         );
@@ -161,12 +362,12 @@ async function deployContractInstance(wasmHash, sourcePublicKey) {
         console.log('Simulating deploy transaction...');
         const simulateResponse = await sorobanServer.simulateTransaction(transaction);
 
-        if (SorobanServer.Api.isSimulationError(simulateResponse)) {
+        if (isSimulationErrorResponse(simulateResponse)) {
             throw new Error(`Simulation failed: ${simulateResponse.error}`);
         }
 
         // Prepare transaction
-        const preparedTransaction = StellarSdk.SorobanRpc.assembleTransaction(
+        const preparedTransaction = await assembleTransactionCompat(
             transaction,
             simulateResponse
         );
@@ -272,14 +473,53 @@ export async function getContractFunctions(contractId) {
     try {
         console.log('Fetching contract spec for:', contractId);
 
-        // Get contract ledger entries
-        // const contract = new StellarSdk.Contract(contractId);
-        
-        // This would require fetching the contract spec from the network
-        // For now, return empty array - will implement in Phase 2
-        
-        console.warn('Contract function discovery not yet implemented');
-        return [];
+        if (!contractId || typeof contractId !== 'string') {
+            throw new Error('contractId is required');
+        }
+
+        const wasmBytes = await sorobanServer.getContractWasmByContractId(contractId);
+        const spec = StellarSdk.contract.Spec.fromWasm(wasmBytes);
+
+        const discoveredFunctions = spec.funcs()
+            .map((fn) => {
+                const name = fn?.name?.()?.toString?.() || fn?.name?.toString?.() || '';
+                if (!name || name.startsWith('__')) {
+                    return null;
+                }
+
+                const inputs = Array.isArray(fn?.inputs?.()) ? fn.inputs() : [];
+                const outputs = Array.isArray(fn?.outputs?.()) ? fn.outputs() : [];
+
+                const params = inputs.map((input, index) => {
+                    const inputName = input?.name?.()?.toString?.() || input?.name?.toString?.() || `arg${index + 1}`;
+                    const inputType = specTypeToLabel(input?.type?.());
+
+                    return {
+                        name: inputName,
+                        type: inputType,
+                        label: `${inputName}: ${inputType}`,
+                    };
+                });
+
+                const outputLabels = outputs.map((output) => specTypeToLabel(output));
+                const returns = outputLabels.length === 0
+                    ? 'void'
+                    : outputLabels.length === 1
+                        ? outputLabels[0]
+                        : `(${outputLabels.join(', ')})`;
+
+                const description = fn?.doc ? String(fn.doc()) : '';
+
+                return {
+                    name,
+                    params,
+                    returns,
+                    description,
+                };
+            })
+            .filter(Boolean);
+
+        return normalizeFunctionDefinitions(discoveredFunctions);
 
     } catch (error) {
         console.error('Error fetching contract functions:', error);
@@ -322,12 +562,12 @@ export async function invokeContract(contractId, functionName, args, sourcePubli
         console.log('Simulating contract call...');
         const simulateResponse = await sorobanServer.simulateTransaction(transaction);
 
-        if (SorobanServer.Api.isSimulationError(simulateResponse)) {
+        if (isSimulationErrorResponse(simulateResponse)) {
             throw new Error(`Simulation failed: ${simulateResponse.error}`);
         }
 
         // Prepare transaction
-        const preparedTransaction = StellarSdk.SorobanRpc.assembleTransaction(
+        const preparedTransaction = await assembleTransactionCompat(
             transaction,
             simulateResponse
         );
@@ -445,7 +685,7 @@ export async function getContractEvents(contractId, { cursor = null, limit = 20 
  * @returns {string} URL to view transaction
  */
 export function getExplorerUrl(hash) {
-    return `https://stellar.expert/explorer/testnet/tx/${hash}`;
+    return getExplorerTxUrl(hash);
 }
 
 /**

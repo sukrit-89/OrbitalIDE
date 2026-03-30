@@ -21,6 +21,7 @@ import { promisify } from 'node:util';
 import { mkdtemp, writeFile, readFile, rm, cp, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 
@@ -29,7 +30,8 @@ const execFileAsync = promisify(execFile);
 const PORT = process.env.PORT || 3001;
 const COMPILE_TIMEOUT = parseInt(process.env.COMPILE_TIMEOUT || '120000'); // 2 min default
 const MAX_SOURCE_SIZE = parseInt(process.env.MAX_SOURCE_SIZE || '102400');  // 100 KB
-const TEMPLATE_DIR = resolve(import.meta.dirname, 'templates');
+const SERVER_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)));
+const TEMPLATE_DIR = resolve(SERVER_DIR, 'templates');
 
 // Track active compilations to limit concurrency
 let activeCompilations = 0;

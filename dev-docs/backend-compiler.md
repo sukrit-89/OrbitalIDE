@@ -67,3 +67,17 @@ Environment variables (from `server/index.js` and Dockerfile):
 - Compiles occur in temporary project directories.
 - Compiler service can be run directly or in Docker.
 - On locked-down Windows setups, App Control policies may block execution of Cargo build scripts in `%TEMP%` (see troubleshooting).
+
+## Smoke Check
+
+Use the repository script to validate backend runtime readiness and compile path in one command:
+
+```powershell
+Set-Location "f:\StellarMonthly\Dojo"
+\scripts\backend-smoke.ps1
+```
+
+The script checks:
+
+- `GET /health` returns `ready=true`
+- `POST /compile` returns a non-empty WASM payload

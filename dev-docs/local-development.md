@@ -25,6 +25,37 @@ npm install
 
 ## Run
 
+### Windows (known-good startup)
+
+Run from the repo root:
+
+```powershell
+Set-Location "f:\StellarMonthly\Dojo"
+\scripts\dev-start.ps1
+```
+
+If starting manually, use absolute paths to avoid nested `client/client` or `server/server` mistakes.
+
+Terminal A (frontend):
+
+```powershell
+Push-Location "f:\StellarMonthly\Dojo\client"
+npm run dev
+```
+
+Terminal B (backend):
+
+```powershell
+Push-Location "f:\StellarMonthly\Dojo\server"
+npm start
+```
+
+Sanity check current directory before running `npm`:
+
+```powershell
+Get-Location
+```
+
 ### Frontend
 
 ```bash

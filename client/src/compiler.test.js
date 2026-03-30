@@ -3,7 +3,7 @@ import {
   CompilationStatus,
   checkCompilerAvailability,
   compileContract,
-} from './compiler';
+} from './services/compiler';
 
 describe('compiler service integration', () => {
   it('loads precompiled wasm for known example contracts', async () => {

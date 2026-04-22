@@ -27,6 +27,9 @@ impl MockToken {
 
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
         from.require_auth();
+        if from == to {
+            return;
+        }
         let from_balance = Self::balance(env.clone(), from.clone());
         let to_balance = Self::balance(env.clone(), to.clone());
         assert!(amount > 0, "amount must be positive");
@@ -64,6 +67,8 @@ fn test_create_stream_stores_correctly() {
     let contract_id = env.register(StreamVault, ());
     let client = StreamVaultClient::new(&env, &contract_id);
 
+    // Note: The final argument is duration_seconds (100).
+    // The transferred total_deposit (1000) is computed as rate_per_second (10) * duration_seconds (100).
     let stream_id = client.create_stream(&sender, &recipient, &token_id, &10, &100);
     assert_eq!(stream_id, 0);
 

@@ -12,6 +12,8 @@ This repository uses the recommended structure for a Soroban project:
 │       │   ├── lib.rs
 │       │   └── test.rs
 │       └── Cargo.toml
+├── scripts
+│   └── test-docker.ps1
 ├── Cargo.toml
 └── README.md
 ```
@@ -26,7 +28,7 @@ From the `streamvault/` workspace root:
 cargo test -p streamvault
 ```
 
-If Windows policy blocks local Rust build scripts, run tests in cached Docker instead:
+If Windows policy blocks local Rust build scripts, run tests in cached Docker instead (the `test-docker.ps1` script resides in the repository's `scripts/` directory):
 
 ```powershell
 .\scripts\test-docker.ps1

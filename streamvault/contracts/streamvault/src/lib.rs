@@ -47,6 +47,7 @@ pub enum Error {
     StreamInactive = 5,
     NoClaimable = 6,
     ArithmeticUnderflow = 7,
+    RecipientIsContract = 8,
 }
 
 #[contractevent(topics = ["StreamCreated"])]
@@ -87,28 +88,42 @@ pub trait TokenContract {
     fn transfer(env: Env, from: Address, to: Address, amount: i128);
 }
 
+const BUMP_THRESHOLD: u32 = 30 * 17280; // 30 days
+const BUMP_AMOUNT: u32 = 30 * 17280; // 30 days
+
 fn read_next_stream_id(env: &Env) -> u64 {
-    env.storage()
-        .persistent()
-        .get(&DataKey::NextStreamId)
-        .unwrap_or(0)
+    let key = DataKey::NextStreamId;
+    match env.storage().persistent().get(&key) {
+        Some(val) => {
+            env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+            val
+        }
+        None => 0,
+    }
 }
 
 fn write_next_stream_id(env: &Env, next_id: u64) {
-    env.storage().persistent().set(&DataKey::NextStreamId, &next_id);
+    let key = DataKey::NextStreamId;
+    env.storage().persistent().set(&key, &next_id);
+    env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
 }
 
 fn read_stream(env: &Env, stream_id: u64) -> Stream {
-    env.storage()
+    let key = DataKey::Stream(stream_id);
+    let val = env.storage()
         .persistent()
-        .get(&DataKey::Stream(stream_id))
-        .unwrap_or_else(|| panic_with_error!(env, Error::StreamNotFound))
+        .get(&key)
+        .unwrap_or_else(|| panic_with_error!(env, Error::StreamNotFound));
+    env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+    val
 }
 
 fn write_stream(env: &Env, stream_id: u64, stream: &Stream) {
+    let key = DataKey::Stream(stream_id);
     env.storage()
         .persistent()
-        .set(&DataKey::Stream(stream_id), stream);
+        .set(&key, stream);
+    env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
 }
 
 fn checked_mul_i128(env: &Env, a: i128, b: i128) -> i128 {
@@ -186,6 +201,10 @@ impl StreamVault {
         duration_seconds: u64,
     ) -> u64 {
         sender.require_auth();
+
+        if recipient == env.current_contract_address() {
+            panic_with_error!(&env, Error::RecipientIsContract);
+        }
 
         if rate_per_second <= 0 {
             panic_with_error!(&env, Error::InvalidRate);

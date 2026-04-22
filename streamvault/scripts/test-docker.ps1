@@ -18,3 +18,7 @@ $cmd = @(
 
 Write-Host "Running cached Docker tests for StreamVault..." -ForegroundColor Cyan
 docker @cmd
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Docker tests failed with exit code $LASTEXITCODE"
+    exit $LASTEXITCODE
+}

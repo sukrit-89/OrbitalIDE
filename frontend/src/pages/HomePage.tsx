@@ -1,5 +1,5 @@
 import { Button } from "../components/Button";
-import { TickerBalance } from "../components/TickerBalance";
+import { stellarConfig, truncateAddress } from "../lib/stellar";
 
 type HomePageProps = {
   onStart: () => void;
@@ -12,6 +12,8 @@ const steps = [
 ];
 
 export function HomePage({ onStart }: HomePageProps) {
+  const vaultLabel = stellarConfig.contractId ? truncateAddress(stellarConfig.contractId) : "Not configured";
+
   return (
     <>
       <section className="mx-auto grid max-w-7xl gap-10 px-4 py-16 sm:px-6 lg:grid-cols-[1fr_0.88fr] lg:px-8 lg:py-24">
@@ -45,10 +47,19 @@ export function HomePage({ onStart }: HomePageProps) {
             <img src="/splash.png" alt="Splash Protocol visual identity" className="h-full w-full object-cover" />
           </div>
           <div className="rounded-md border border-line bg-ink p-5 sm:p-7">
-            <TickerBalance label="live demo balance" />
-            <div className="mt-6 flex items-center justify-between border-t border-line pt-4 text-sm text-secondary">
-              <span>Rate</span>
-              <span className="font-mono text-primary">0.00420 USDC / sec</span>
+            <span className="mb-2 block text-xs font-medium uppercase tracking-[0.18em] text-secondary">testnet vault</span>
+            <p className="font-mono text-2xl font-bold leading-tight text-primary sm:text-3xl">
+              {vaultLabel}
+            </p>
+            <div className="mt-6 grid gap-3 border-t border-line pt-4 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-secondary">Network</span>
+                <span className="font-mono text-primary">Testnet</span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-secondary">Status</span>
+                <span className="font-mono text-flow">Deployed</span>
+              </div>
             </div>
           </div>
         </div>

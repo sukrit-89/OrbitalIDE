@@ -28,15 +28,3 @@ export function useTickerBalance(stream: Stream | undefined, tickMs = 100) {
 
   return useMemo(() => (stream ? getClaimable(stream, now) : 0), [now, stream]);
 }
-
-export function useDemoBalance(ratePerSecond = 0.0042, tickMs = 100) {
-  const [startedAt] = useState(() => Date.now() - 1000 * 60 * 38);
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), tickMs);
-    return () => window.clearInterval(id);
-  }, [tickMs]);
-
-  return ((now - startedAt) / 1000) * ratePerSecond;
-}

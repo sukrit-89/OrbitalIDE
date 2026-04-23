@@ -17,7 +17,7 @@ type CreateStreamPageProps = {
 
 export function CreateStreamPage({ walletAddress, creating, onConnectWallet, onCreated }: CreateStreamPageProps) {
   const [recipient, setRecipient] = useState("");
-  const [token, setToken] = useState<TokenSymbol>("USDC");
+  const [token, setToken] = useState<TokenSymbol>("XLM");
   const [amountPerDay, setAmountPerDay] = useState("125");
   const [durationDays, setDurationDays] = useState("7");
 
@@ -80,8 +80,8 @@ export function CreateStreamPage({ walletAddress, creating, onConnectWallet, onC
                 onChange={(event) => setToken(event.target.value as TokenSymbol)}
                 className="h-12 rounded-md border border-line bg-ink px-4 text-sm text-primary outline-none transition focus:border-flow"
               >
-                <option>USDC</option>
                 <option>XLM</option>
+                <option>USDC</option>
               </select>
             </label>
             <label className="grid gap-2">

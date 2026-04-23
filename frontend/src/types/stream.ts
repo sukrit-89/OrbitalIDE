@@ -6,7 +6,7 @@ export type Stream = {
   role: "sender" | "recipient";
   sender: string;
   recipient: string;
-  token: "USDC" | "XLM" | "PYUSD";
+  token: "USDC" | "XLM";
   tokenContractId?: string;
   ratePerSecond: number;
   totalDeposit: number;

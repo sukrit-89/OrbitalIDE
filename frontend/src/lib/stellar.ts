@@ -42,6 +42,13 @@ export const stellarConfig = {
 
 export const stellarRpc = new rpc.Server(stellarConfig.rpcUrl);
 
+type RawTransactionPoller = {
+  _getTransaction: (hash: string) => Promise<{
+    status: string;
+    resultXdr?: string;
+  }>;
+};
+
 export function truncateAddress(address: string) {
   return address.length > 12 ? `${address.slice(0, 5)}...${address.slice(-5)}` : address;
 }
@@ -227,18 +234,18 @@ export async function submitSignedTransaction(signedXdr: string) {
     throw new Error(`Transaction was not accepted: ${submitted.status}`);
   }
 
+  const rawRpc = stellarRpc as unknown as RawTransactionPoller;
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
-    const result = await stellarRpc.getTransaction(submitted.hash);
+    const result = await rawRpc._getTransaction(submitted.hash);
 
-    if (result.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+    if (result.status === "SUCCESS") {
       return {
         hash: submitted.hash,
-        returnValue: result.returnValue,
       };
     }
-    if (result.status === rpc.Api.GetTransactionStatus.FAILED) {
-      throw new Error(`Transaction failed: ${result.resultXdr.toXDR("base64")}`);
+    if (result.status === "FAILED") {
+      throw new Error(`Transaction failed: ${result.resultXdr ?? "unknown failure"}`);
     }
   }
 
@@ -257,6 +264,7 @@ export async function createStream(
 
   const tokenContractId = stellarConfig.tokenContracts[input.token];
   const amounts = formToContractAmounts(input);
+  const streamId = await getStreamCount(input.sender);
 
   const prepared = await buildContractTx(input.sender, "create_stream", [
     scAddress(input.sender),
@@ -269,13 +277,8 @@ export async function createStream(
   onStep?.("signing");
   const signedXdr = await signTransaction(prepared.toXDR());
   onStep?.("submitting");
-  const submitted = await submitSignedTransaction(signedXdr);
+  await submitSignedTransaction(signedXdr);
   onStep?.("confirmed");
-
-  const streamId = submitted.returnValue ? Number(scValToNative(submitted.returnValue)) : undefined;
-  if (streamId === undefined || Number.isNaN(streamId)) {
-    throw new Error("Stream was confirmed but no stream ID was returned.");
-  }
 
   return getStream(input.sender, streamId);
 }
@@ -323,14 +326,15 @@ export async function withdrawStream(
   onStep?: (step: TransactionStep) => void
 ) {
   validateVaultConfig();
+  const claimableBeforeSubmit = await getClaimable(recipient, streamId);
   const prepared = await buildContractTx(recipient, "withdraw", [scU64(streamId)]);
   onStep?.("signing");
   const signedXdr = await signTransaction(prepared.toXDR());
   onStep?.("submitting");
-  const submitted = await submitSignedTransaction(signedXdr);
+  await submitSignedTransaction(signedXdr);
   onStep?.("confirmed");
 
-  return submitted.returnValue ? unitsToNumber(asBigInt(scValToNative(submitted.returnValue))) : 0;
+  return claimableBeforeSubmit;
 }
 
 export async function cancelStream(
@@ -340,19 +344,18 @@ export async function cancelStream(
   onStep?: (step: TransactionStep) => void
 ) {
   validateVaultConfig();
+  const stream = await getStream(sender, streamId);
+  const recipientOwed = await getClaimable(sender, streamId);
+  const senderRefund = Math.max(0, stream.totalDeposit - stream.withdrawn - recipientOwed);
   const prepared = await buildContractTx(sender, "cancel", [scU64(streamId)]);
   onStep?.("signing");
   const signedXdr = await signTransaction(prepared.toXDR());
   onStep?.("submitting");
-  const submitted = await submitSignedTransaction(signedXdr);
+  await submitSignedTransaction(signedXdr);
   onStep?.("confirmed");
 
-  const result = submitted.returnValue ? scValToNative(submitted.returnValue) : undefined;
-  const recipientOwed = asBigInt(Array.isArray(result) ? result[0] : getStructValue(result, "0"));
-  const senderRefund = asBigInt(Array.isArray(result) ? result[1] : getStructValue(result, "1"));
-
   return {
-    recipientOwed: unitsToNumber(recipientOwed),
-    senderRefund: unitsToNumber(senderRefund),
+    recipientOwed,
+    senderRefund,
   };
 }

@@ -228,20 +228,6 @@ VITE_XLM_TOKEN_CONTRACT_ID=CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGC
     - Stream detail shows a live ticking claimable balance.
 12. Add the final Vercel URL to the **Submission Links** table above.
 
-## Demo Video Checklist
-
-Recommended 60-75 second flow:
-
-1. Show the landing page and StreamVault testnet positioning.
-2. Open the developer resources/footer briefly.
-3. Connect Freighter on Stellar testnet.
-4. Create a stream with a valid recipient, token, flow rate, and duration.
-5. Show Freighter signing and transaction confirmation.
-6. Show the stream detail page and live claimable balance ticking.
-7. Withdraw accrued funds or show the cancel action.
-8. Show the README/test evidence or terminal output with `5 passed`.
-
-Avoid claiming Level 4 features as implemented. Blend, factory streams, and FLOW receipts are future scope.
 
 ## Security Notes
 

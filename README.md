@@ -10,7 +10,7 @@ Splash is a Level 3 Stellar Soroban payment streaming dApp. A sender locks funds
 | --- | --- |
 | Public repository | <https://github.com/sukrit-89/Splash> |
 | Live demo | https://splash-self.vercel.app/ |
-| Demo video | Add your Loom or YouTube URL here after recording |
+| Demo video | https://youtu.be/ziJpZYw0jEw |
 | Test output screenshot | [Testcase.png](Testcase.png) |
 | Contract tests | `5 passed; 0 failed` |
 | Testnet StreamVault | `CCE2PSOOTQWLNCY3RFJOSI7RNIRVQFE64L33KJNBXTXOW63YVRRQLFA6` |

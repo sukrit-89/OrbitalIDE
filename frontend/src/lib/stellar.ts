@@ -17,9 +17,9 @@ export const rpcUrl =
 export const networkPassphrase = import.meta.env
   .VITE_STELLAR_NETWORK_PASSPHRASE as string || Networks.TESTNET;
 export const streamVaultContractId = import.meta.env
-  .VITE_STREAMVAULT_CONTRACT_ID as string;
+  .VITE_STREAMVAULT_CONTRACT_ID as string || "CBPNO56NJ4SI5UDJWVRLWVSCDTSMRDZCEPFNEPLRD4XTABYB6RUIBZQR";
 export const streamFactoryContractId = import.meta.env
-  .VITE_STREAMFACTORY_CONTRACT_ID as string | undefined;
+  .VITE_STREAMFACTORY_CONTRACT_ID as string | undefined || "CD6FF6PO7CM3U27JVGVGGLLN7XAUCDJMZGAHBLZQPVXKIRXC2LF3SW4R";
 export const tokenContracts = {
   USDC: import.meta.env.VITE_USDC_TOKEN_CONTRACT_ID as string,
   XLM: import.meta.env.VITE_XLM_TOKEN_CONTRACT_ID as string,

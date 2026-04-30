@@ -120,32 +120,6 @@ export function Landing() {
   return (
     <div>
       <section className="hero-bloom relative flex min-h-screen flex-col items-center justify-center px-6 text-center">
-        <header className="absolute inset-x-0 top-0 z-20 flex h-[68px] items-center justify-between px-5 sm:px-8 lg:px-12">
-          <a
-            aria-label="Splash home"
-            className="flex h-10 items-center rounded-md px-2 transition-colors duration-150 hover:bg-[var(--bg-hover)]"
-            href="/"
-          >
-            <SplashLogo />
-          </a>
-          <nav className="hidden items-center gap-2 sm:flex">
-            <a
-              className="rounded-md px-3 py-2 text-sm text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
-              href="#architecture"
-            >
-              Architecture
-            </a>
-            <a
-              className="rounded-md px-3 py-2 text-sm text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
-              href="#resources"
-            >
-              Docs
-            </a>
-            <Button onClick={launch} size="sm" variant="primary">
-              Launch App
-            </Button>
-          </nav>
-        </header>
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden">
           <EtheralShadow
             className="h-[420px] w-[min(92vw,760px)] opacity-100 sm:h-[500px] lg:h-[560px] lg:w-[820px]"

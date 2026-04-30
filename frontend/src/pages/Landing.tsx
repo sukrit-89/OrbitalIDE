@@ -133,11 +133,12 @@ export function Landing() {
           />
         </div>
         <div className="relative z-10 mx-auto max-w-3xl">
-          <div className="mb-6 flex flex-col items-center gap-2">
-            <SplashLogo className="justify-center" />
-            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--accent)]">
-              Level 4 / Factory + FLOW on Testnet
+          <div className="mb-6 inline-flex items-center gap-3 border-y border-[var(--accent-border)] px-4 py-2">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)] shadow-[0_0_18px_rgba(34,197,94,0.7)]" />
+            <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-[var(--accent)]">
+              SPLASH PROTOCOL
             </p>
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)] shadow-[0_0_18px_rgba(34,197,94,0.7)]" />
           </div>
           <h1 className="text-balance text-[40px] font-light leading-[1.08] text-[var(--text-primary)] sm:text-[56px] lg:text-[80px]">
             Get Paid
